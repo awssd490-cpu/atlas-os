@@ -196,7 +196,7 @@ class LifecycleManager:
                 # has a default that returns ModuleHealth.ok()
                 health_results[name] = {
                     "state": state.value,
-                    "health": result.to_dict() if hasattr(result, "to_dict") else {"status": str(result)},
+                    "health": result.model_dump() if hasattr(result, "model_dump") else {"status": str(result)},
                 }
                 if hasattr(result, "status") and result.status == "unhealthy":
                     overall = "unhealthy"

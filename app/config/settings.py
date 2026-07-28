@@ -60,6 +60,49 @@ class DatabaseConfig(BaseModel):
     echo: bool = Field(default=False, description="Emit SQL statements to logs")
 
 
+class StorageConfig(BaseModel):
+    """Storage subsystem configuration."""
+
+    sqlite_path: str = Field(
+        default="data/atlas.db",
+        description="Path to the SQLite database file",
+    )
+    sqlite_pool_size: int = Field(
+        default=1,
+        ge=1,
+        le=16,
+        description="SQLite connection pool size",
+    )
+    cache_ttl_default: int = Field(
+        default=300,
+        ge=0,
+        description="Default cache TTL in seconds (0 = no expiry)",
+    )
+    cache_max_size: int = Field(
+        default=10_000,
+        ge=1,
+        description="Maximum cache entries (LRU eviction)",
+    )
+    vector_dimension_default: int = Field(
+        default=1536,
+        ge=1,
+        description="Default embedding dimension",
+    )
+    vector_namespaces: list[str] = Field(
+        default_factory=lambda: ["default"],
+        description="Registered vector namespaces",
+    )
+    object_store_path: str = Field(
+        default="data/objects",
+        description="Local object store base path",
+    )
+    event_store_retention_days: int = Field(
+        default=90,
+        ge=0,
+        description="Event store retention in days (0 = indefinite)",
+    )
+
+
 class AtlasSettings(BaseSettings):
     """Root settings object — merge of defaults, ``.env``, and env vars.
 
@@ -83,3 +126,4 @@ class AtlasSettings(BaseSettings):
     server: ServerConfig = ServerConfig()
     logging: LoggingConfig = LoggingConfig()
     database: DatabaseConfig = DatabaseConfig()
+    storage: StorageConfig = StorageConfig()

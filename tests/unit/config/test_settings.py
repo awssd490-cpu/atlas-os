@@ -53,6 +53,16 @@ class TestAtlasSettingsDefaults:
         assert settings.database.pool_max == 16
         assert settings.database.echo is False
 
+    def test_storage_defaults(self) -> None:
+        settings = AtlasSettings()
+        assert settings.storage.sqlite_path == "data/atlas.db"
+        assert settings.storage.cache_ttl_default == 300
+        assert settings.storage.cache_max_size == 10_000
+        assert settings.storage.vector_dimension_default == 1536
+        assert settings.storage.vector_namespaces == ["default"]
+        assert settings.storage.object_store_path == "data/objects"
+        assert settings.storage.event_store_retention_days == 90
+
 
 class TestAtlasSettingsEnvironOverrides:
     """Environment variables with ``ATLAS_`` prefix override defaults."""
