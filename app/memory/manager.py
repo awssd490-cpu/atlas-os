@@ -20,6 +20,7 @@ from app.memory.events import (
 )
 from app.memory.interfaces import (
     GCResult,
+    MemoryCompressor,
     MemoryGarbageCollector,
     MemoryGraph,
     MemoryQuery,
@@ -299,6 +300,7 @@ class MemoryManager(MemoryService, MemorySearchService, MemoryGarbageCollector, 
         retention: RetentionPolicy | None = None,
         graph: MemoryGraph | None = None,
         snapshot_service: SnapshotService | None = None,
+        compressor: MemoryCompressor | None = None,
     ) -> None:
         self._repo = repository
         self._cache = cache
@@ -309,6 +311,7 @@ class MemoryManager(MemoryService, MemorySearchService, MemoryGarbageCollector, 
         self._retention = retention or RetentionPolicy()
         self._graph = graph
         self._snapshot_service = snapshot_service
+        self._compressor = compressor
 
     @property
     def graph(self) -> MemoryGraph | None:
@@ -319,6 +322,11 @@ class MemoryManager(MemoryService, MemorySearchService, MemoryGarbageCollector, 
     def snapshots(self) -> SnapshotService | None:
         """Access the snapshot service for checkpoint/restore."""
         return self._snapshot_service
+
+    @property
+    def compressor(self) -> MemoryCompressor | None:
+        """Access the memory compressor."""
+        return self._compressor
 
     # ------------------------------------------------------------------
     # MemoryService implementation

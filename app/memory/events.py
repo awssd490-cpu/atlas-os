@@ -83,3 +83,15 @@ class SnapshotRestored(Event):
     snapshot_id: str = ""
     label: str = ""
     memory_count: int = 0
+
+
+class MemoriesCompressed(Event):
+    """Published after a compression run completes."""
+
+    _event_type: ClassVar[str] = "memory.compressed"
+    source: str = "memory"
+    original_count: int = 0
+    compressed_count: int = 0
+    strategy: str = ""
+    ratio: float = 1.0
+    snapshot_id: str = ""

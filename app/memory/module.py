@@ -23,6 +23,7 @@ from app.memory.manager import MemoryManager, MemoryRepository
 from app.memory.memory import MemoryState
 from app.memory.migrations import V002_MemorySchema
 from app.memory.policies import DEFAULT_TYPE_POLICIES, RetentionPolicy
+from app.memory.compression import CompressionPolicy, CompressionService, MemoryCompressorImpl
 from app.memory.relationships import MemoryGraphImpl
 from app.memory.snapshots import SnapshotRepository, SnapshotService
 from app.storage.cache.memory import MemoryCache
@@ -153,6 +154,26 @@ class MemoryModule(Module):
             logger=self._context.logger,
         )
 
+        # Create compression service
+        compression_policy = CompressionPolicy(
+            archive_threshold=self._context.config.get(
+                "memory.archive_threshold", default=0.3
+            ),
+            take_snapshot_before=self._context.config.get(
+                "memory.compress_snapshot", default=True
+            ),
+        )
+        compression_service = CompressionService(
+            repository=self._repository,
+            connection=self._connection,
+            graph=memory_graph,
+            snapshot_service=snapshot_service,
+            event_bus=self._context.event_bus,
+            telemetry=self._context.telemetry,
+            logger=self._context.logger,
+            policy=compression_policy,
+        )
+
         self._manager = MemoryManager(
             repository=self._repository,
             cache=self._cache,
@@ -163,6 +184,7 @@ class MemoryModule(Module):
             retention=retention,
             graph=memory_graph,
             snapshot_service=snapshot_service,
+            compressor=compression_service,
         )
 
         duration_ms = (time.monotonic() - start_time) * 1000
