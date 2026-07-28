@@ -10,13 +10,14 @@ formatting exists in this module.
 
 from __future__ import annotations
 
-import math
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from app.memory.budget import BudgetConfig, BudgetResult, TokenBudgetManager
 from app.memory.compression import CompressionService
+from app.memory.tokens import TokenEstimator
 from app.memory.interfaces import MemoryGraph
 from app.memory.manager import MemoryManager
 from app.memory.memory import Memory, MemoryState
@@ -166,44 +167,6 @@ class ContextBuilderConfig:
 
 
 # ---------------------------------------------------------------------------
-# Token estimator
-# ---------------------------------------------------------------------------
-
-
-class TokenEstimator:
-    """Rough token estimation for memories and text.
-
-    Uses a simple 4-char-per-token heuristic with an overhead factor.
-    This is intentionally approximate — it gives the Token Budget
-    Manager a baseline to work from.
-    """
-
-    @staticmethod
-    def estimate_text(text: str) -> int:
-        """Estimate tokens in plain text."""
-        return max(1, math.ceil(len(text) / 4))
-
-    @staticmethod
-    def estimate_memory(memory: Memory) -> int:
-        """Estimate tokens consumed by a single memory."""
-        total = len(memory.content)
-        total += len(memory.memory_type) * 2
-        total += len(memory.namespace) * 2
-        total += len(memory.source)
-        total += len(memory.owner)
-        total += sum(len(t) for t in memory.tags)
-        # Metadata overhead
-        total += len(str(memory.metadata))
-        # Per-memory structural overhead (~40 tokens)
-        return max(1, math.ceil(total / 4) + 40)
-
-    @staticmethod
-    def estimate_memories(memories: list[Memory]) -> int:
-        """Estimate tokens for a list of memories."""
-        return sum(TokenEstimator.estimate_memory(m) for m in memories)
-
-
-# ---------------------------------------------------------------------------
 # ContextBuilder (primary interface)
 # ---------------------------------------------------------------------------
 
@@ -226,11 +189,13 @@ class ContextBuilder:
         pipeline: RetrievalPipeline | None = None,
         config: ContextBuilderConfig | None = None,
         selection_engine: MemorySelectionEngine | None = None,
+        budget_manager: TokenBudgetManager | None = None,
     ) -> None:
         self._memory_manager = memory_manager
         self._pipeline = pipeline
         self._config = config or ContextBuilderConfig()
         self._selection_engine = selection_engine
+        self._budget_manager = budget_manager
 
     @property
     def config(self) -> ContextBuilderConfig:
@@ -240,6 +205,11 @@ class ContextBuilder:
     def selection_engine(self) -> MemorySelectionEngine | None:
         """Access the memory selection engine."""
         return self._selection_engine
+
+    @property
+    def budget_manager(self) -> TokenBudgetManager | None:
+        """Access the token budget manager."""
+        return self._budget_manager
 
     async def build(
         self,
@@ -459,7 +429,31 @@ class ContextBuilder:
 
         ordered = self._order_sections(sections)
         budget = max_tokens or cfg.max_tokens
-        trimmed, used_tokens = self._apply_token_budget(ordered, budget)
+
+        # Use TokenBudgetManager if available, otherwise fall back to inline
+        if self._budget_manager is not None:
+            # Build a temporary package for the budget manager
+            temp_stats = ContextStatistics(
+                total_memories=sum(s.memory_count for s in ordered),
+                total_sections=len(ordered),
+                total_tokens=sum(s.token_count for s in ordered),
+            )
+            temp_package = ContextPackage(
+                request_id=request_id or "",
+                sections=ordered,
+                statistics=temp_stats,
+            )
+            budget_result = await self._budget_manager.optimise(
+                temp_package,
+                target_budget=budget,
+            )
+            final_package = budget_result.package
+            trimmed = final_package.sections
+            used_tokens = final_package.total_tokens
+            budget_decisions = budget_result.decisions
+        else:
+            trimmed, used_tokens = self._apply_token_budget(ordered, budget)
+            budget_decisions = []
 
         assembly_ms = (time.monotonic() - assembly_start) * 1000
 
@@ -485,15 +479,22 @@ class ContextBuilder:
 
         total_elapsed = (time.monotonic() - start_time) * 1000
 
+        meta: dict[str, Any] = {
+            **(metadata or {}),
+            "total_elapsed_ms": round(total_elapsed, 2),
+            "config_max_tokens": budget,
+        }
+        if budget_decisions:
+            meta["budget_decisions"] = [
+                {"memory_id": d.memory_id, "section_type": d.section_type, "reason": d.reason}
+                for d in budget_decisions[:20]  # limit to avoid huge metadata
+            ]
+
         return ContextPackage(
             request_id=request_id or "",
             sections=trimmed,
             statistics=stats,
-            metadata={
-                **(metadata or {}),
-                "total_elapsed_ms": round(total_elapsed, 2),
-                "config_max_tokens": budget,
-            },
+            metadata=meta,
         )
 
     # ------------------------------------------------------------------
