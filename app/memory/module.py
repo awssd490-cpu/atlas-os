@@ -23,6 +23,8 @@ from app.memory.manager import MemoryManager, MemoryRepository
 from app.memory.memory import MemoryState
 from app.memory.migrations import V002_MemorySchema
 from app.memory.policies import DEFAULT_TYPE_POLICIES, RetentionPolicy
+from app.memory.relationships import MemoryGraphImpl
+from app.memory.snapshots import SnapshotRepository, SnapshotService
 from app.storage.cache.memory import MemoryCache
 from app.storage.connection.sqlite import SQLiteConnection
 from app.storage.interfaces import CacheService
@@ -133,6 +135,24 @@ class MemoryModule(Module):
             ),
         )
 
+        # Create graph service (relationships)
+        memory_graph = MemoryGraphImpl(
+            connection=self._connection,
+            event_bus=self._context.event_bus,
+            telemetry=self._context.telemetry,
+            logger=self._context.logger,
+        )
+
+        # Create snapshot service
+        snapshot_repo = SnapshotRepository(connection=self._connection)
+        snapshot_service = SnapshotService(
+            repository=snapshot_repo,
+            connection=self._connection,
+            event_bus=self._context.event_bus,
+            telemetry=self._context.telemetry,
+            logger=self._context.logger,
+        )
+
         self._manager = MemoryManager(
             repository=self._repository,
             cache=self._cache,
@@ -141,6 +161,8 @@ class MemoryModule(Module):
             logger=self._context.logger,
             policies=DEFAULT_TYPE_POLICIES,
             retention=retention,
+            graph=memory_graph,
+            snapshot_service=snapshot_service,
         )
 
         duration_ms = (time.monotonic() - start_time) * 1000

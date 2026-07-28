@@ -21,9 +21,11 @@ from app.memory.events import (
 from app.memory.interfaces import (
     GCResult,
     MemoryGarbageCollector,
+    MemoryGraph,
     MemoryQuery,
     MemorySearchService,
     MemoryService,
+    MemorySnapshot,
     MemorySnapshotService,
     Page,
     PaginationParams,
@@ -36,6 +38,7 @@ from app.memory.policies import (
     MemoryTypePolicy,
     RetentionPolicy,
 )
+from app.memory.snapshots import SnapshotService
 from app.storage.interfaces import (
     CacheService,
     FilterCondition,
@@ -294,6 +297,8 @@ class MemoryManager(MemoryService, MemorySearchService, MemoryGarbageCollector, 
         logger: Logger | None = None,
         policies: dict[str, MemoryTypePolicy] | None = None,
         retention: RetentionPolicy | None = None,
+        graph: MemoryGraph | None = None,
+        snapshot_service: SnapshotService | None = None,
     ) -> None:
         self._repo = repository
         self._cache = cache
@@ -302,6 +307,18 @@ class MemoryManager(MemoryService, MemorySearchService, MemoryGarbageCollector, 
         self._logger = logger
         self._type_policies = policies or DEFAULT_TYPE_POLICIES
         self._retention = retention or RetentionPolicy()
+        self._graph = graph
+        self._snapshot_service = snapshot_service
+
+    @property
+    def graph(self) -> MemoryGraph | None:
+        """Access the memory graph for relationship queries."""
+        return self._graph
+
+    @property
+    def snapshots(self) -> SnapshotService | None:
+        """Access the snapshot service for checkpoint/restore."""
+        return self._snapshot_service
 
     # ------------------------------------------------------------------
     # MemoryService implementation
@@ -567,14 +584,18 @@ class MemoryManager(MemoryService, MemorySearchService, MemoryGarbageCollector, 
         return count
 
     # ------------------------------------------------------------------
-    # MemorySnapshotService (stub — full in Phase 3.5)
+    # MemorySnapshotService implementation
     # ------------------------------------------------------------------
 
     async def create_snapshot(self, label: str = "") -> MemorySnapshot:
-        raise NotImplementedError("Snapshots deferred to Phase 3.5")
+        if self._snapshot_service is None:
+            raise RuntimeError("Snapshot service not configured")
+        return await self._snapshot_service.create_snapshot(label=label)
 
     async def list_snapshots(self) -> list[dict[str, Any]]:
-        return []
+        if self._snapshot_service is None:
+            return []
+        return await self._snapshot_service.list_snapshots()
 
     # ------------------------------------------------------------------
     # Internal helpers

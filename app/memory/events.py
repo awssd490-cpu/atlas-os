@@ -62,3 +62,24 @@ class MemoryRelationshipsUpdated(Event):
     memory_id: str = ""
     added: list[str] = []
     removed: list[str] = []
+
+
+class SnapshotCreated(Event):
+    """Published when a memory snapshot is created."""
+
+    _event_type: ClassVar[str] = "memory.snapshot_created"
+    source: str = "memory"
+    snapshot_id: str = ""
+    label: str = ""
+    memory_count: int = 0
+    relationship_count: int = 0
+
+
+class SnapshotRestored(Event):
+    """Published when a snapshot is restored (memories rolled back)."""
+
+    _event_type: ClassVar[str] = "memory.snapshot_restored"
+    source: str = "memory"
+    snapshot_id: str = ""
+    label: str = ""
+    memory_count: int = 0
