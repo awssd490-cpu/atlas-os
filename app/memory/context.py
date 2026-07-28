@@ -21,6 +21,7 @@ from app.memory.tokens import TokenEstimator
 from app.memory.interfaces import MemoryGraph
 from app.memory.manager import MemoryManager
 from app.memory.memory import Memory, MemoryState
+from app.memory.optimization import ContextOptimizationEngine, OptimizationConfig, OptimizationResult
 from app.memory.retrieval import (
     RetrievalPipeline,
     RetrievalQuery,
@@ -190,12 +191,14 @@ class ContextBuilder:
         config: ContextBuilderConfig | None = None,
         selection_engine: MemorySelectionEngine | None = None,
         budget_manager: TokenBudgetManager | None = None,
+        optimization_engine: ContextOptimizationEngine | None = None,
     ) -> None:
         self._memory_manager = memory_manager
         self._pipeline = pipeline
         self._config = config or ContextBuilderConfig()
         self._selection_engine = selection_engine
         self._budget_manager = budget_manager
+        self._optimization_engine = optimization_engine
 
     @property
     def config(self) -> ContextBuilderConfig:
@@ -210,6 +213,11 @@ class ContextBuilder:
     def budget_manager(self) -> TokenBudgetManager | None:
         """Access the token budget manager."""
         return self._budget_manager
+
+    @property
+    def optimization_engine(self) -> ContextOptimizationEngine | None:
+        """Access the context optimization engine."""
+        return self._optimization_engine
 
     async def build(
         self,
@@ -454,6 +462,30 @@ class ContextBuilder:
         else:
             trimmed, used_tokens = self._apply_token_budget(ordered, budget)
             budget_decisions = []
+
+        # ------------------------------------------------------------------
+        # Phase 10: Context optimization (improve quality, not budget)
+        # ------------------------------------------------------------------
+        if self._optimization_engine is not None and trimmed:
+            temp_stats = ContextStatistics(
+                total_memories=sum(s.memory_count for s in trimmed),
+                total_sections=len(trimmed),
+                total_tokens=used_tokens,
+            )
+            temp_pkg = ContextPackage(
+                request_id=request_id or "",
+                sections=trimmed,
+                statistics=temp_stats,
+            )
+            opt_result = await self._optimization_engine.optimize(temp_pkg)
+            trimmed = opt_result.package.sections
+            used_tokens = opt_result.package.total_tokens
+            # Merge optimization decisions into metadata
+            if opt_result.decisions:
+                budget_decisions.append(
+                    type("_", (), {"memory_id": "", "section_type": "__optimization__",
+                                    "reason": f"{len(opt_result.decisions)} optimization decisions"})()
+                )
 
         assembly_ms = (time.monotonic() - assembly_start) * 1000
 
