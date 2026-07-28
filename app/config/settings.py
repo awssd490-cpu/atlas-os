@@ -103,6 +103,79 @@ class StorageConfig(BaseModel):
     )
 
 
+class MemoryConfig(BaseModel):
+    """Memory subsystem configuration and policy defaults."""
+
+    default_ttl_seconds: float = Field(
+        default=86400.0,
+        ge=0,
+        description="Default TTL for short-term memories in seconds (0 = no expiry)",
+    )
+    long_term_ttl_seconds: float = Field(
+        default=0.0,
+        ge=0,
+        description="TTL for long-term memories (0 = no expiry)",
+    )
+    working_ttl_seconds: float = Field(
+        default=300.0,
+        ge=0,
+        description="TTL for working memories in seconds",
+    )
+    max_short_term: int = Field(
+        default=100,
+        ge=1,
+        description="Maximum short-term memories per namespace",
+    )
+    max_working: int = Field(
+        default=20,
+        ge=1,
+        description="Maximum working memories per namespace",
+    )
+    default_importance: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Default importance for new memories",
+    )
+    importance_decay_rate: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+        description="Importance decay rate per day (0 = no decay)",
+    )
+    importance_promotion_threshold: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="Importance above which memories are promoted to long-term",
+    )
+    archive_threshold: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        description="Importance below which memories become archive candidates",
+    )
+    gc_interval_seconds: float = Field(
+        default=3600.0,
+        ge=60.0,
+        description="Interval between garbage collector sweeps in seconds",
+    )
+    grace_period_seconds: float = Field(
+        default=604800.0,
+        ge=0,
+        description="Grace period for FORGOTTEN memories before hard delete (7 days)",
+    )
+    context_token_budget: int = Field(
+        default=4096,
+        ge=256,
+        description="Default token budget for context assembly",
+    )
+    enable_auto_archive: bool = Field(
+        default=True,
+        description="Automatically archive low-importance memories",
+    )
+
+
 class AtlasSettings(BaseSettings):
     """Root settings object — merge of defaults, ``.env``, and env vars.
 
@@ -127,3 +200,4 @@ class AtlasSettings(BaseSettings):
     logging: LoggingConfig = LoggingConfig()
     database: DatabaseConfig = DatabaseConfig()
     storage: StorageConfig = StorageConfig()
+    memory: MemoryConfig = MemoryConfig()
