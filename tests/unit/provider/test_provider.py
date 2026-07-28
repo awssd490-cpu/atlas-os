@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from app.provider.errors import CapabilityNotSupportedError
+from app.provider.config import ProviderConfig
 from app.provider.models import (
     Capabilities,
     ProviderCapability,
@@ -33,8 +34,8 @@ from app.provider.provider import Provider
 class _EchoProvider(Provider):
     """A test provider that echoes back the input."""
 
-    def __init__(self, **kwargs: Any) -> None:
-        self._kwargs = kwargs
+    def __init__(self, config: ProviderConfig | None = None, **kwargs: Any) -> None:
+        self._config = config or ProviderConfig()
         self._initialized = False
         self._shutdown = False
 
@@ -78,8 +79,8 @@ class _EchoProvider(Provider):
 class _StreamingProvider(Provider):
     """A test provider that supports streaming."""
 
-    def __init__(self, **kwargs: Any) -> None:
-        self._kwargs = kwargs
+    def __init__(self, config: ProviderConfig | None = None, **kwargs: Any) -> None:
+        self._config = config or ProviderConfig()
 
     async def initialize(self) -> None:
         pass

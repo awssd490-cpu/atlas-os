@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.provider.config import ConfigBuilder, DictConfigSource, ProviderConfig, validate_config
 from app.provider.errors import ProviderError, ProviderNotFoundError
 from app.provider.provider import Provider
 from app.provider.registry import ProviderRegistry
@@ -60,6 +61,61 @@ class ProviderFactory:
         return list(self._constructors.keys())
 
     # ------------------------------------------------------------------
+    # Configuration
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_provider_config(name: str, provider_config: ProviderConfig) -> None:
+        """Validate a ``ProviderConfig``, raising on failure."""
+        errors: list[str] = []
+
+        if not provider_config.credentials.has_key:
+            errors.append("api_key is required")
+
+        temp = provider_config.generation.temperature
+        if temp < 0.0 or temp > 2.0:
+            errors.append(f"temperature must be in [0.0, 2.0], got {temp}")
+
+        mt = provider_config.generation.max_tokens
+        if mt < 1:
+            errors.append(f"max_tokens must be >= 1, got {mt}")
+
+        r = provider_config.retry.max_retries
+        if r < 0 or r > 20:
+            errors.append(f"max_retries must be in [0, 20], got {r}")
+
+        if errors:
+            raise ValueError(
+                f"Provider {name!r} configuration invalid: "
+                f"{'; '.join(errors)}"
+            )
+
+    def build_config(self, name: str, config: dict[str, Any] | None = None) -> ProviderConfig:
+        """Build a validated ``ProviderConfig`` for *name*.
+
+        Merges the provided *config* dictionary with any environment
+        variables (via ``EnvConfigSource``).
+
+        Args:
+            name: The provider name.
+            config: Optional configuration dictionary.
+
+        Returns:
+            A validated ``ProviderConfig``.
+
+        Raises:
+            ValueError: If validation fails.
+        """
+        builder = ConfigBuilder()
+        if config:
+            builder.add_source(DictConfigSource(config, priority=10))
+        provider_config = builder.build(name=name)
+
+        self._validate_provider_config(name, provider_config)
+
+        return provider_config
+
+    # ------------------------------------------------------------------
     # Construction
     # ------------------------------------------------------------------
 
@@ -68,6 +124,7 @@ class ProviderFactory:
         name: str,
         config: dict[str, Any] | None = None,
         *,
+        provider_config: ProviderConfig | None = None,
         register: bool = True,
         set_default: bool = False,
     ) -> Provider:
@@ -75,7 +132,8 @@ class ProviderFactory:
 
         Args:
             name: The provider name.
-            config: Configuration to pass to the provider constructor.
+            config: Raw configuration dictionary (alternative to *provider_config*).
+            provider_config: Pre-built ``ProviderConfig`` (alternative to *config*).
             register: If ``True``, register the instance in the registry.
             set_default: If ``True``, set as the default provider.
 
@@ -92,7 +150,8 @@ class ProviderFactory:
                 details={"available_constructors": list(self._constructors.keys())},
             )
 
-        instance = cls(**(config or {}))
+        resolved = provider_config or self.build_config(name, config)
+        instance = cls(config=resolved)
         if register:
             self._registry.register(name, instance, default=set_default)
         return instance
@@ -102,6 +161,7 @@ class ProviderFactory:
         name: str,
         config: dict[str, Any] | None = None,
         *,
+        provider_config: ProviderConfig | None = None,
         register: bool = True,
         set_default: bool = False,
     ) -> Provider:
@@ -112,6 +172,7 @@ class ProviderFactory:
         instance = await self.create(
             name,
             config=config,
+            provider_config=provider_config,
             register=register,
             set_default=set_default,
         )
@@ -144,6 +205,8 @@ class ProviderFactory:
     async def create_default(
         self,
         config: dict[str, Any] | None = None,
+        *,
+        provider_config: ProviderConfig | None = None,
     ) -> Provider:
         """Create and initialize the default provider using its constructor.
 
@@ -155,4 +218,6 @@ class ProviderFactory:
                 name="(default)",
                 details={"message": "No default provider name configured"},
             )
-        return await self.create_and_initialize(name, config=config, register=True)
+        return await self.create_and_initialize(
+            name, config=config, provider_config=provider_config, register=True,
+        )

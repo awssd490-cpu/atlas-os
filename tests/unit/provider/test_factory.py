@@ -10,6 +10,8 @@ from app.provider.registry import ProviderRegistry
 
 from tests.unit.provider.test_provider import _EchoProvider
 
+_TEST_CONFIG = {"api_key": "test-key-12345"}
+
 
 class TestProviderFactory:
     def test_register_constructor(self) -> None:
@@ -39,7 +41,7 @@ class TestProviderFactory:
         reg = ProviderRegistry()
         factory = ProviderFactory(reg)
         factory.register_constructor("echo", _EchoProvider)
-        provider = await factory.create("echo", register=False)
+        provider = await factory.create("echo", config=_TEST_CONFIG, register=False)
         assert provider is not None
         assert reg.count() == 0  # not registered
 
@@ -47,7 +49,7 @@ class TestProviderFactory:
         reg = ProviderRegistry()
         factory = ProviderFactory(reg)
         factory.register_constructor("echo", _EchoProvider)
-        provider = await factory.create("echo", register=True)
+        provider = await factory.create("echo", config=_TEST_CONFIG, register=True)
         assert reg.count() == 1
         assert reg.lookup("echo") is provider
 
@@ -55,35 +57,34 @@ class TestProviderFactory:
         reg = ProviderRegistry()
         factory = ProviderFactory(reg)
         factory.register_constructor("echo", _EchoProvider)
-        await factory.create("echo", register=True, set_default=True)
+        await factory.create("echo", config=_TEST_CONFIG, register=True, set_default=True)
         assert reg.default_provider() is not None
 
     async def test_create_not_found(self) -> None:
         reg = ProviderRegistry()
         factory = ProviderFactory(reg)
         with pytest.raises(ProviderNotFoundError):
-            await factory.create("unknown")
+            await factory.create("unknown", config=_TEST_CONFIG)
 
     async def test_create_and_initialize(self) -> None:
         reg = ProviderRegistry()
         factory = ProviderFactory(reg)
         factory.register_constructor("echo", _EchoProvider)
-        provider = await factory.create_and_initialize("echo", register=True)
+        provider = await factory.create_and_initialize("echo", config=_TEST_CONFIG, register=True)
         assert provider._initialized is True
 
     async def test_initialize_all(self) -> None:
         reg = ProviderRegistry()
         factory = ProviderFactory(reg)
         factory.register_constructor("echo", _EchoProvider)
-        await factory.create("echo", register=False)
-        # Should not raise
+        await factory.create("echo", config=_TEST_CONFIG, register=False)
         await factory.initialize_all()
 
     async def test_shutdown_all(self) -> None:
         reg = ProviderRegistry()
         factory = ProviderFactory(reg)
         factory.register_constructor("echo", _EchoProvider)
-        p = await factory.create("echo", register=True)
+        p = await factory.create("echo", config=_TEST_CONFIG, register=True)
         await factory.shutdown_all()
         assert p._shutdown is True
 
@@ -92,10 +93,19 @@ class TestProviderFactory:
         factory = ProviderFactory(reg)
         assert factory.list_constructors() == []
 
-    @property
-    def test_create_default(self) -> None:
+    async def test_create_with_provider_config(self) -> None:
+        from app.provider.config import ProviderConfig
+
         reg = ProviderRegistry()
         factory = ProviderFactory(reg)
         factory.register_constructor("echo", _EchoProvider)
-        reg.register("echo", _EchoProvider(), default=True)
-        # create_default would need an async test
+        pc = ProviderConfig(name="echo", credentials=ProviderConfig.from_dict({"api_key": "k"}).credentials)
+        provider = await factory.create("echo", provider_config=pc, register=False)
+        assert provider is not None
+
+    async def test_config_validation_failure(self) -> None:
+        reg = ProviderRegistry()
+        factory = ProviderFactory(reg)
+        factory.register_constructor("echo", _EchoProvider)
+        with pytest.raises(ValueError, match="configuration invalid"):
+            await factory.create("echo", config={}, register=False)
