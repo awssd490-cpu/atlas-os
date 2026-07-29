@@ -58,6 +58,12 @@ if TYPE_CHECKING:
         ToolInvalidArgumentsError,
     )
 
+from app.tools.integration import (  # noqa: F401
+    extract_tool_calls,
+    format_tool_result,
+    execute_tool_calls,
+)
+
 __all__ = [
     "ToolDefinition",
     "ToolParameter",
@@ -73,4 +79,8 @@ __all__ = [
     "ToolValidationError",
     "ToolExecutionError",
     "ToolInvalidArgumentsError",
+    # Integration
+    "extract_tool_calls",
+    "format_tool_result",
+    "execute_tool_calls",
 ]
