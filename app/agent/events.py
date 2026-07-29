@@ -51,6 +51,11 @@ CHECKPOINT_SAVED = "checkpoint_saved"
 CHECKPOINT_FAILED = "checkpoint_failed"
 PARALLEL_TOOL_STARTED = "parallel_tool_started"
 PARALLEL_TOOL_COMPLETED = "parallel_tool_completed"
+RETRY_STARTED = "retry_started"
+RETRY_ATTEMPT = "retry_attempt"
+RETRY_SUCCEEDED = "retry_succeeded"
+RETRY_FAILED = "retry_failed"
+RETRY_EXHAUSTED = "retry_exhausted"
 
 
 # ---------------------------------------------------------------------------
@@ -791,6 +796,148 @@ class ParallelToolCompletedEvent(AgentEvent):
         object.__setattr__(self, "tool_name", tool_name)
         object.__setattr__(self, "tool_call_id", tool_call_id)
         object.__setattr__(self, "success", success)
+
+
+@dataclass(frozen=True)
+class RetryStartedEvent(AgentEvent):
+    """Emitted when a retry begins."""
+
+    event_type: str = RETRY_STARTED
+    target: str = ""
+    max_attempts: int = 0
+
+    def __init__(
+        self,
+        *,
+        iteration: int = 0,
+        target: str = "",
+        max_attempts: int = 0,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=RETRY_STARTED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "target", target)
+        object.__setattr__(self, "max_attempts", max_attempts)
+
+
+@dataclass(frozen=True)
+class RetryAttemptEvent(AgentEvent):
+    """Emitted for each retry attempt."""
+
+    event_type: str = RETRY_ATTEMPT
+    attempt: int = 0
+    delay: float = 0.0
+    error: str = ""
+    error_type: str = ""
+
+    def __init__(
+        self,
+        *,
+        iteration: int = 0,
+        attempt: int,
+        delay: float = 0.0,
+        error: str = "",
+        error_type: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=RETRY_ATTEMPT,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "attempt", attempt)
+        object.__setattr__(self, "delay", delay)
+        object.__setattr__(self, "error", error)
+        object.__setattr__(self, "error_type", error_type)
+
+
+@dataclass(frozen=True)
+class RetrySucceededEvent(AgentEvent):
+    """Emitted when a retry succeeds."""
+
+    event_type: str = RETRY_SUCCEEDED
+    attempts: int = 0
+    total_delay: float = 0.0
+
+    def __init__(
+        self,
+        *,
+        iteration: int = 0,
+        attempts: int,
+        total_delay: float = 0.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=RETRY_SUCCEEDED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "attempts", attempts)
+        object.__setattr__(self, "total_delay", total_delay)
+
+
+@dataclass(frozen=True)
+class RetryFailedEvent(AgentEvent):
+    """Emitted when a retry fails (non-retryable error)."""
+
+    event_type: str = RETRY_FAILED
+    error: str = ""
+    error_type: str = ""
+
+    def __init__(
+        self,
+        *,
+        iteration: int = 0,
+        error: str = "",
+        error_type: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=RETRY_FAILED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "error", error)
+        object.__setattr__(self, "error_type", error_type)
+
+
+@dataclass(frozen=True)
+class RetryExhaustedEvent(AgentEvent):
+    """Emitted when all retry attempts are exhausted."""
+
+    event_type: str = RETRY_EXHAUSTED
+    attempts: int = 0
+    total_delay: float = 0.0
+    error: str = ""
+    error_type: str = ""
+
+    def __init__(
+        self,
+        *,
+        iteration: int = 0,
+        attempts: int,
+        total_delay: float = 0.0,
+        error: str = "",
+        error_type: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=RETRY_EXHAUSTED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "attempts", attempts)
+        object.__setattr__(self, "total_delay", total_delay)
+        object.__setattr__(self, "error", error)
+        object.__setattr__(self, "error_type", error_type)
 
 
 # ---------------------------------------------------------------------------

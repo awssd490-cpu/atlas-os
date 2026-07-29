@@ -64,6 +64,16 @@ class AgentConfig:
             ``"auto"`` (default) — parallel when independent.
             ``"parallel"`` — always parallel.
             ``"sequential"`` — always sequential (backward compatible).
+        retry_enabled: If ``True`` (default), enable retry logic for
+            transient failures in provider and tool execution.
+        retry_strategy: Strategy for retry delays.
+            ``"exponential_with_jitter"`` (default).
+            ``"exponential_backoff"``, ``"fixed_delay"``, ``"no_retry"``.
+        max_retry_attempts: Maximum number of attempts (including first).
+            Default 3.
+        retry_initial_delay: Initial delay in seconds.  Default 0.5.
+        retry_max_delay: Maximum delay in seconds.  Default 8.0.
+        retry_jitter: Whether to add jitter to delays.  Default True.
     """
 
     max_iterations: int = 10
@@ -85,6 +95,12 @@ class AgentConfig:
     parallel_tools_enabled: bool = True
     max_parallel_tools: int = 8
     execution_strategy: str = "auto"
+    retry_enabled: bool = True
+    retry_strategy: str = "exponential_with_jitter"
+    max_retry_attempts: int = 3
+    retry_initial_delay: float = 0.5
+    retry_max_delay: float = 8.0
+    retry_jitter: bool = True
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
@@ -128,6 +144,28 @@ class AgentConfig:
                 f"execution_strategy must be one of {valid_strategies}, "
                 f"got {self.execution_strategy!r}"
             )
+        valid_retry_strategies = (
+            "no_retry", "fixed_delay", "exponential_backoff",
+            "exponential_with_jitter",
+        )
+        if self.retry_strategy not in valid_retry_strategies:
+            raise ValueError(
+                f"retry_strategy must be one of {valid_retry_strategies}, "
+                f"got {self.retry_strategy!r}"
+            )
+        if self.max_retry_attempts < 1:
+            raise ValueError(
+                f"max_retry_attempts must be >= 1, got {self.max_retry_attempts}"
+            )
+        if self.retry_initial_delay < 0:
+            raise ValueError(
+                f"retry_initial_delay must be >= 0, got {self.retry_initial_delay}"
+            )
+        if self.retry_max_delay < self.retry_initial_delay:
+            raise ValueError(
+                f"retry_max_delay ({self.retry_max_delay}) must be >= "
+                f"retry_initial_delay ({self.retry_initial_delay})"
+            )
         valid_freq = ("manual", "iteration", "provider_response")
         if self.checkpoint_frequency not in valid_freq:
             raise ValueError(
@@ -159,4 +197,10 @@ class AgentConfig:
             "emit_thinking_chunks": self.emit_thinking_chunks,
             "checkpoint_enabled": self.checkpoint_enabled,
             "checkpoint_frequency": self.checkpoint_frequency,
+            "retry_enabled": self.retry_enabled,
+            "retry_strategy": self.retry_strategy,
+            "max_retry_attempts": self.max_retry_attempts,
+            "retry_initial_delay": self.retry_initial_delay,
+            "retry_max_delay": self.retry_max_delay,
+            "retry_jitter": self.retry_jitter,
         }
