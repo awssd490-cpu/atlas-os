@@ -33,6 +33,18 @@ AGENT_COMPLETED = "agent_completed"
 AGENT_FAILED = "agent_failed"
 AGENT_TOOL_CALL_LIMIT = "agent_tool_call_limit"
 AGENT_ITERATION_LIMIT = "agent_iteration_limit"
+MEMORY_RETRIEVAL_STARTED = "memory_retrieval_started"
+MEMORY_RETRIEVAL_COMPLETED = "memory_retrieval_completed"
+MEMORY_INJECTION_COMPLETED = "memory_injection_completed"
+PLAN_CREATED = "plan_created"
+PLAN_STEP_STARTED = "plan_step_started"
+PLAN_STEP_COMPLETED = "plan_step_completed"
+PLAN_STEP_FAILED = "plan_step_failed"
+PLAN_COMPLETED = "plan_completed"
+PROVIDER_STREAM_STARTED = "provider_stream_started"
+PROVIDER_CHUNK_RECEIVED = "provider_chunk_received"
+PROVIDER_STREAM_COMPLETED = "provider_stream_completed"
+PROVIDER_STREAM_FAILED = "provider_stream_failed"
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +252,220 @@ class IterationCompletedEvent(AgentEvent):
 
 
 @dataclass(frozen=True)
+class MemoryRetrievalStartedEvent(AgentEvent):
+    """Emitted before memory retrieval begins."""
+
+    event_type: str = MEMORY_RETRIEVAL_STARTED
+    query: str = ""
+
+    def __init__(
+        self,
+        *,
+        iteration: int,
+        query: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=MEMORY_RETRIEVAL_STARTED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "query", query)
+
+
+@dataclass(frozen=True)
+class MemoryRetrievalCompletedEvent(AgentEvent):
+    """Emitted after memory retrieval finishes."""
+
+    event_type: str = MEMORY_RETRIEVAL_COMPLETED
+    memory_count: int = 0
+    query: str = ""
+
+    def __init__(
+        self,
+        *,
+        iteration: int,
+        memory_count: int,
+        query: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=MEMORY_RETRIEVAL_COMPLETED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "memory_count", memory_count)
+        object.__setattr__(self, "query", query)
+
+
+@dataclass(frozen=True)
+class MemoryInjectionCompletedEvent(AgentEvent):
+    """Emitted after memories are injected into the provider request."""
+
+    event_type: str = MEMORY_INJECTION_COMPLETED
+    method: str = ""
+
+    def __init__(
+        self,
+        *,
+        iteration: int,
+        method: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=MEMORY_INJECTION_COMPLETED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "method", method)
+
+
+@dataclass(frozen=True)
+class PlanCreatedEvent(AgentEvent):
+    """Emitted when a plan is created."""
+
+    event_type: str = PLAN_CREATED
+    plan_id: str = ""
+    step_count: int = 0
+
+    def __init__(
+        self,
+        *,
+        iteration: int,
+        plan_id: str,
+        step_count: int,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=PLAN_CREATED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "plan_id", plan_id)
+        object.__setattr__(self, "step_count", step_count)
+
+
+@dataclass(frozen=True)
+class PlanStepStartedEvent(AgentEvent):
+    """Emitted when a plan step starts execution."""
+
+    event_type: str = PLAN_STEP_STARTED
+    step_id: str = ""
+    step_title: str = ""
+
+    def __init__(
+        self,
+        *,
+        iteration: int,
+        step_id: str,
+        step_title: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=PLAN_STEP_STARTED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "step_id", step_id)
+        object.__setattr__(self, "step_title", step_title)
+
+
+@dataclass(frozen=True)
+class PlanStepCompletedEvent(AgentEvent):
+    """Emitted when a plan step completes."""
+
+    event_type: str = PLAN_STEP_COMPLETED
+    step_id: str = ""
+    step_title: str = ""
+
+    def __init__(
+        self,
+        *,
+        iteration: int,
+        step_id: str,
+        step_title: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=PLAN_STEP_COMPLETED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "step_id", step_id)
+        object.__setattr__(self, "step_title", step_title)
+
+
+@dataclass(frozen=True)
+class PlanStepFailedEvent(AgentEvent):
+    """Emitted when a plan step fails."""
+
+    event_type: str = PLAN_STEP_FAILED
+    step_id: str = ""
+    step_title: str = ""
+    error: str = ""
+
+    def __init__(
+        self,
+        *,
+        iteration: int,
+        step_id: str,
+        step_title: str = "",
+        error: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=PLAN_STEP_FAILED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "step_id", step_id)
+        object.__setattr__(self, "step_title", step_title)
+        object.__setattr__(self, "error", error)
+
+
+@dataclass(frozen=True)
+class PlanCompletedEvent(AgentEvent):
+    """Emitted when the plan finishes (completed or failed)."""
+
+    event_type: str = PLAN_COMPLETED
+    plan_id: str = ""
+    completed: bool = True
+    total_steps: int = 0
+    completed_steps: int = 0
+    failed_steps: int = 0
+
+    def __init__(
+        self,
+        *,
+        iteration: int,
+        plan_id: str,
+        completed: bool,
+        total_steps: int,
+        completed_steps: int,
+        failed_steps: int,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=PLAN_COMPLETED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "plan_id", plan_id)
+        object.__setattr__(self, "completed", completed)
+        object.__setattr__(self, "total_steps", total_steps)
+        object.__setattr__(self, "completed_steps", completed_steps)
+        object.__setattr__(self, "failed_steps", failed_steps)
+
+
+@dataclass(frozen=True)
 class AgentCompletedEvent(AgentEvent):
     """Emitted when the agent run completes successfully."""
 
@@ -266,6 +492,116 @@ class AgentCompletedEvent(AgentEvent):
         object.__setattr__(self, "total_iterations", total_iterations)
         object.__setattr__(self, "total_tool_calls", total_tool_calls)
         object.__setattr__(self, "total_provider_requests", total_provider_requests)
+
+
+@dataclass(frozen=True)
+class ProviderStreamStartedEvent(AgentEvent):
+    """Emitted when a provider stream begins."""
+
+    event_type: str = PROVIDER_STREAM_STARTED
+    stream_type: str = ""
+    message_count: int = 0
+
+    def __init__(
+        self,
+        *,
+        iteration: int,
+        stream_type: str = "provider",
+        message_count: int = 0,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=PROVIDER_STREAM_STARTED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "stream_type", stream_type)
+        object.__setattr__(self, "message_count", message_count)
+
+
+@dataclass(frozen=True)
+class ProviderChunkReceivedEvent(AgentEvent):
+    """Emitted when a chunk is received from the provider stream."""
+
+    event_type: str = PROVIDER_CHUNK_RECEIVED
+    chunk_type: str = ""
+    content: str = ""
+    chunk_index: int = 0
+
+    def __init__(
+        self,
+        *,
+        iteration: int,
+        chunk_type: str = "text",
+        content: str = "",
+        chunk_index: int = 0,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=PROVIDER_CHUNK_RECEIVED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "chunk_type", chunk_type)
+        object.__setattr__(self, "content", content)
+        object.__setattr__(self, "chunk_index", chunk_index)
+
+
+@dataclass(frozen=True)
+class ProviderStreamCompletedEvent(AgentEvent):
+    """Emitted when a provider stream completes."""
+
+    event_type: str = PROVIDER_STREAM_COMPLETED
+    total_chunks: int = 0
+    total_content_length: int = 0
+
+    def __init__(
+        self,
+        *,
+        iteration: int,
+        total_chunks: int,
+        total_content_length: int,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=PROVIDER_STREAM_COMPLETED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "total_chunks", total_chunks)
+        object.__setattr__(self, "total_content_length", total_content_length)
+
+
+@dataclass(frozen=True)
+class ProviderStreamFailedEvent(AgentEvent):
+    """Emitted when a provider stream fails."""
+
+    event_type: str = PROVIDER_STREAM_FAILED
+    error: str = ""
+    error_type: str = ""
+    chunk_index: int = 0
+
+    def __init__(
+        self,
+        *,
+        iteration: int,
+        error: str,
+        error_type: str = "",
+        chunk_index: int = 0,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=PROVIDER_STREAM_FAILED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "error", error)
+        object.__setattr__(self, "error_type", error_type)
+        object.__setattr__(self, "chunk_index", chunk_index)
 
 
 @dataclass(frozen=True)

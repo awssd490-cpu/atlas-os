@@ -34,12 +34,35 @@ from app.agent.events import (
     AgentStartedEvent,
     IterationCompletedEvent,
     IterationStartedEvent,
+    MemoryInjectionCompletedEvent,
+    MemoryRetrievalCompletedEvent,
+    MemoryRetrievalStartedEvent,
+    PlanCompletedEvent,
+    PlanCreatedEvent,
+    PlanStepCompletedEvent,
+    PlanStepFailedEvent,
+    PlanStepStartedEvent,
+    ProviderChunkReceivedEvent,
     ProviderRequestStartedEvent,
     ProviderResponseReceivedEvent,
+    ProviderStreamCompletedEvent,
+    ProviderStreamFailedEvent,
+    ProviderStreamStartedEvent,
     ToolExecutionFinishedEvent,
     ToolExecutionStartedEvent,
 )
-from app.provider.models import ProviderMessage, ProviderRequest, ProviderResponse
+from app.agent.memory import MemoryContextBuilder
+from app.agent.plan import Plan, PlanResult, PlanStep, StepStatus
+from app.agent.planner import PlanningEngine
+from app.provider.models import (
+    ProviderMessage,
+    ProviderRequest,
+    ProviderResponse,
+    Role,
+    StopReason,
+    StreamingChunk,
+)
+from app.provider.streaming import ProviderStreamResult, aggregate_stream
 from app.provider.provider import Provider
 from app.tools.integration import execute_tool_calls, extract_tool_calls
 from app.tools.runtime import ToolRuntime
@@ -70,11 +93,14 @@ class AgentRuntime:
         tool_runtime: ToolRuntime,
         config: AgentConfig | None = None,
         dispatcher: AgentEventDispatcher | None = None,
+        memory: MemorySearchService | None = None,
     ) -> None:
         self._provider = provider
         self._tool_runtime = tool_runtime
         self._config = config or AgentConfig.default()
         self._dispatcher = dispatcher or AgentEventDispatcher()
+        self._memory_builder = MemoryContextBuilder(memory)
+        self._planner = PlanningEngine()
 
         # Internal state (reset per run)
         self._iteration_count: int = 0
@@ -223,22 +249,91 @@ class AgentRuntime:
 
         last_response: ProviderResponse | None = None
 
+        # Initialize plan
+        plan = self._create_and_emit_plan(config)
+
         for iteration in range(config.max_iterations):
             self._iteration_count = iteration + 1
+
+            # Start plan step
+            plan = self._start_plan_step(plan, config)
 
             event = IterationStartedEvent(iteration=self._iteration_count)
             yield event
             await self._emit(event)
 
-            # 1. Call the provider
+            # 1. Retrieve memories and inject context
+            memory_context = await self._retrieve_and_inject_memories(
+                messages, system, config, True,  # streaming mode — yields events
+            )
+            if memory_context is not None:
+                augmented_messages, augmented_system = memory_context
+                # Only yield events in streaming mode; injection events
+                # are already yielded by _retrieve_and_inject_memories
+            else:
+                augmented_messages = messages
+                augmented_system = system
+
+            # 2. Call the provider (streaming if enabled)
             event = ProviderRequestStartedEvent(
                 iteration=self._iteration_count,
-                message_count=len(messages),
+                message_count=len(augmented_messages),
             )
             yield event
             await self._emit(event)
 
-            response = await self._call_provider(messages, system, kwargs)
+            stream_result = await self._call_provider_stream(
+                augmented_messages, augmented_system, kwargs,
+            )
+
+            if hasattr(stream_result, "__aiter__"):
+                # Streaming mode — stream_result is an AsyncIterator
+                from app.provider.streaming import aggregate_stream
+
+                raw_stream = stream_result
+
+                await self._emit(
+                    ProviderStreamStartedEvent(
+                        iteration=self._iteration_count,
+                        stream_type="provider",
+                        message_count=len(augmented_messages),
+                    )
+                )
+
+                chunk_index = 0
+                aggregated = await aggregate_stream(raw_stream)
+
+                content = aggregated.content
+                response = ProviderResponse(
+                    content=content,
+                    message=ProviderMessage(role=Role.ASSISTANT, content=content),
+                    stop_reason=StopReason.STOP,
+                    tool_calls=aggregated.tool_calls,
+                )
+
+                await self._emit(
+                    ProviderStreamCompletedEvent(
+                        iteration=self._iteration_count,
+                        total_chunks=chunk_index,
+                        total_content_length=len(content),
+                    )
+                )
+
+                if aggregated.tool_calls:
+                    response = ProviderResponse(
+                        content=content,
+                        message=ProviderMessage(
+                            role=Role.ASSISTANT,
+                            content=content,
+                            tool_calls=aggregated.tool_calls,
+                        ),
+                        stop_reason=StopReason.TOOL_CALL,
+                        tool_calls=aggregated.tool_calls,
+                    )
+            else:
+                # Non-streaming mode
+                response = stream_result
+
             last_response = response
 
             event = ProviderResponseReceivedEvent(
@@ -249,11 +344,17 @@ class AgentRuntime:
             yield event
             await self._emit(event)
 
-            # 2. Extract tool calls
+            # 3. Extract tool calls
             tool_calls = extract_tool_calls(response)
 
-            # 3. No tool calls → final response
+            # 4. No tool calls → final response
             if not tool_calls:
+                # Complete the current plan step
+                plan = self._complete_plan_step(plan, config)
+                # Finish the plan
+                plan_result = self._finish_plan(plan, config)
+                self._emit_plan_completed(plan_result)
+
                 event = AgentCompletedEvent(
                     iteration=self._iteration_count,
                     total_iterations=self._iteration_count,
@@ -316,6 +417,9 @@ class AgentRuntime:
             messages.extend(tool_messages)
             self._tool_calls_executed += len(tool_calls)
 
+            # Complete the current plan step
+            plan = self._complete_plan_step(plan, config)
+
             event = IterationCompletedEvent(
                 iteration=self._iteration_count,
                 tool_calls_in_iteration=len(tool_calls),
@@ -325,6 +429,10 @@ class AgentRuntime:
 
         # Iteration limit reached
         result = self._handle_iteration_limit(config, last_response)
+        if config.planning_enabled:
+            plan_result = self._planner.finish_plan(plan, failed=False)
+            self._emit_plan_completed(plan_result)
+
         event = AgentCompletedEvent(
             iteration=self._iteration_count,
             total_iterations=self._iteration_count,
@@ -381,6 +489,16 @@ class AgentRuntime:
         """The event dispatcher."""
         return self._dispatcher
 
+    @property
+    def current_plan(self) -> Plan | None:
+        """The current execution plan, if planning is enabled.
+
+        Returns ``None`` if planning is disabled or no run has started.
+        """
+        if not self._config.planning_enabled:
+            return None
+        return self._planner.current_plan
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -403,6 +521,245 @@ class AgentRuntime:
         if self._dispatcher is not None:
             await self._dispatcher.emit(event)
 
+    async def _retrieve_and_inject_memories(
+        self,
+        messages: list[ProviderMessage],
+        system: str,
+        config: AgentConfig,
+        streaming: bool = False,
+    ) -> tuple[list[ProviderMessage], str] | None:
+        """Retrieve relevant memories and augment the request context.
+
+        If memory is disabled or no memory service is configured, returns
+        ``None`` and the caller should use the original ``messages`` and
+        ``system`` unchanged.
+
+        In streaming mode (``streaming=True``), memory-related events
+        are yielded by this method — but since we are a coroutine called
+        from within an async generator, events are emitted via the
+        dispatcher instead.
+
+        Args:
+            messages: The current conversation messages.
+            system: The current system prompt.
+            config: The agent config.
+            streaming: Whether we are in streaming mode.
+
+        Returns:
+            ``(augmented_messages, augmented_system)`` if memories were
+            injected, or ``None`` if no injection was performed.
+        """
+        if not config.memory_enabled:
+            return None
+
+        memory_service = self._memory_builder
+        if memory_service is None:
+            return None
+
+        # Build query from the last user message
+        query_text = ""
+        for msg in reversed(messages):
+            role_str = msg.role.value if hasattr(msg.role, 'value') else str(msg.role)
+            if role_str == "user":
+                query_text = msg.content
+                break
+
+        await self._emit(
+            MemoryRetrievalStartedEvent(
+                iteration=self._iteration_count,
+                query=query_text,
+            )
+        )
+
+        memories = await memory_service.retrieve(
+            query=query_text,
+            config=config,
+        )
+
+        await self._emit(
+            MemoryRetrievalCompletedEvent(
+                iteration=self._iteration_count,
+                memory_count=len(memories),
+                query=query_text,
+            )
+        )
+
+        if not memories:
+            return None
+
+        # Format memories and inject
+        formatted = memory_service.format_as_text(memories)
+        _inject_method = config.inject_memory_as
+        method = config.inject_memory_as
+
+        if method == "system":
+            # Prepend to system prompt
+            augmented_system = f"{system}\n\n{formatted}" if system else formatted
+            augmented_messages = list(messages)
+
+        elif method == "assistant":
+            # Append as an assistant message
+            augmented_system = system
+            augmented_messages = list(messages)
+            augmented_messages.append(
+                ProviderMessage(
+                    role="assistant",
+                    content=f"*Context from memory:*\n{formatted}",
+                )
+            )
+
+        elif method == "hidden_context":
+            # Store in request metadata (handled by provider)
+            augmented_system = system
+            augmented_messages = list(messages)
+
+        else:
+            return None
+
+        await self._emit(
+            MemoryInjectionCompletedEvent(
+                iteration=self._iteration_count,
+                method=method,
+                metadata={"memory_count": len(memories)},
+            )
+        )
+
+        return augmented_messages, augmented_system
+
+    # ------------------------------------------------------------------
+    # Plan helpers
+    # ------------------------------------------------------------------
+
+    def _create_and_emit_plan(self, config: AgentConfig) -> Plan | None:
+        """Create a plan and emit PlanCreatedEvent.
+
+        Returns ``None`` if planning is disabled.
+        """
+        if not config.planning_enabled:
+            return None
+
+        title = f"Agent reasoning ({config.max_iterations} iterations max)"
+        steps = tuple(
+            PlanStep(
+                id=str(__import__("uuid").uuid4())[:8],
+                title=f"Iteration {i + 1}",
+                status=StepStatus.PENDING,
+            )
+            for i in range(min(config.max_iterations, config.max_plan_steps))
+        )
+        # Insert as list
+        plan = self._planner.create_plan(
+            title=title,
+            steps=list(steps),
+        )
+        self._emit_async(
+            PlanCreatedEvent(
+                iteration=self._iteration_count,
+                plan_id=plan.id,
+                step_count=plan.step_count,
+            )
+        )
+        return plan
+
+    def _start_plan_step(
+        self,
+        plan: Plan | None,
+        config: AgentConfig,
+    ) -> Plan | None:
+        """Start the next plan step and emit PlanStepStartedEvent.
+
+        Returns the updated plan (or ``None`` if planning is disabled).
+        """
+        if plan is None or not config.planning_enabled:
+            return None
+
+        next_step = self._planner.get_next_step(plan)
+        if next_step is None:
+            return plan
+
+        updated = self._planner.start_step(plan, next_step.id)
+        self._emit_async(
+            PlanStepStartedEvent(
+                iteration=self._iteration_count,
+                step_id=next_step.id,
+                step_title=next_step.title,
+            )
+        )
+        return updated
+
+    def _complete_plan_step(
+        self,
+        plan: Plan | None,
+        config: AgentConfig,
+    ) -> Plan | None:
+        """Complete the current plan step and emit PlanStepCompletedEvent.
+
+        Returns the updated plan (or ``None`` if planning is disabled).
+        """
+        if plan is None or not config.planning_enabled:
+            return None
+        if self._planner.current_step_id is None:
+            return plan
+
+        step_id = self._planner.current_step_id
+        step = next((s for s in plan.steps if s.id == step_id), None)
+        updated = self._planner.complete_step(plan, step_id)
+        self._emit_async(
+            PlanStepCompletedEvent(
+                iteration=self._iteration_count,
+                step_id=step_id,
+                step_title=step.title if step else "",
+            )
+        )
+        return updated
+
+    def _finish_plan(
+        self,
+        plan: Plan | None,
+        config: AgentConfig,
+        *,
+        failed: bool = False,
+    ) -> PlanResult | None:
+        """Finish the plan and return the result.
+
+        Returns ``None`` if planning is disabled.
+        """
+        if plan is None or not config.planning_enabled:
+            return None
+        return self._planner.finish_plan(plan, failed=failed)
+
+    def _emit_plan_completed(self, plan_result: PlanResult | None) -> None:
+        """Emit PlanCompletedEvent for the given result."""
+        if plan_result is None:
+            return
+        self._emit_async(
+            PlanCompletedEvent(
+                iteration=self._iteration_count,
+                plan_id=plan_result.plan.id,
+                completed=plan_result.completed,
+                total_steps=plan_result.total_steps,
+                completed_steps=plan_result.completed_steps,
+                failed_steps=plan_result.failed_steps,
+            )
+        )
+
+    def _emit_async(self, event: AgentEvent) -> None:
+        """Fire-and-forget emit via the dispatcher.
+
+        This is a last-resort helper for synchronous methods that need
+        to emit events without awaiting.  Prefer ``await _emit()`` in
+        async contexts.
+        """
+        import asyncio
+        if self._dispatcher is not None:
+            # Must await in the event loop — schedule it
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self._dispatcher.emit(event))
+            except RuntimeError:
+                pass
+
     # ------------------------------------------------------------------
     # Internal loop
     # ------------------------------------------------------------------
@@ -420,19 +777,35 @@ class AgentRuntime:
         """
         last_response: ProviderResponse | None = None
 
+        # Initialize plan
+        plan = self._create_and_emit_plan(config)
+
         for iteration in range(config.max_iterations):
             self._iteration_count = iteration + 1
 
+            # Start plan step
+            plan = self._start_plan_step(plan, config)
+
             await self._emit(IterationStartedEvent(iteration=self._iteration_count))
 
-            # 1. Call the provider
+            # 1. Retrieve memories and inject context
+            memory_context = await self._retrieve_and_inject_memories(
+                messages, system, config, False,  # non-streaming — no yield
+            )
+            if memory_context is not None:
+                augmented_messages, augmented_system = memory_context
+            else:
+                augmented_messages = messages
+                augmented_system = system
+
+            # 2. Call the provider
             await self._emit(
                 ProviderRequestStartedEvent(
                     iteration=self._iteration_count,
-                    message_count=len(messages),
+                    message_count=len(augmented_messages),
                 )
             )
-            response = await self._call_provider(messages, system, kwargs)
+            response = await self._call_provider(augmented_messages, augmented_system, kwargs)
             last_response = response
 
             await self._emit(
@@ -443,11 +816,17 @@ class AgentRuntime:
                 )
             )
 
-            # 2. Extract tool calls
+            # 3. Extract tool calls
             tool_calls = extract_tool_calls(response)
 
-            # 3. No tool calls → final response
+            # 4. No tool calls → final response
             if not tool_calls:
+                # Complete the current plan step
+                plan = self._complete_plan_step(plan, config)
+                # Finish the plan
+                plan_result = self._finish_plan(plan, config)
+                self._emit_plan_completed(plan_result)
+
                 await self._emit(
                     AgentCompletedEvent(
                         iteration=self._iteration_count,
@@ -508,6 +887,9 @@ class AgentRuntime:
             messages.extend(tool_messages)
             self._tool_calls_executed += len(tool_calls)
 
+            # Complete the current plan step
+            plan = self._complete_plan_step(plan, config)
+
             await self._emit(
                 IterationCompletedEvent(
                     iteration=self._iteration_count,
@@ -517,6 +899,11 @@ class AgentRuntime:
 
         # Iteration limit reached — delegate to helper
         result = self._handle_iteration_limit(config, last_response)
+        # Finish the plan as completed (partial response is still a completion)
+        if config.planning_enabled:
+            plan_result = self._planner.finish_plan(plan, failed=False)
+            self._emit_plan_completed(plan_result)
+
         await self._emit(
             AgentCompletedEvent(
                 iteration=self._iteration_count,
@@ -582,7 +969,7 @@ class AgentRuntime:
         system: str,
         kwargs: dict[str, Any],
     ) -> ProviderResponse:
-        """Make a single provider request.
+        """Make a single provider request (non-streaming).
 
         Assumes *kwargs* is a local copy owned by the runtime (already
         copied in ``run()``), so mutating it is safe.
@@ -609,3 +996,47 @@ class AgentRuntime:
                     "provider_requests": self._provider_requests,
                 },
             ) from exc
+
+    async def _call_provider_stream(
+        self,
+        messages: list[ProviderMessage],
+        system: str,
+        kwargs: dict[str, Any],
+    ) -> Any:
+        """Make a streaming provider request.
+
+        Returns an ``AsyncIterator[StreamingChunk]`` if streaming was
+        started, or a ``ProviderResponse`` if the provider doesn't
+        support streaming (fallback to ``generate()``).
+
+        Assumes *kwargs* is a local copy owned by the runtime.
+        """
+        self._provider_requests += 1
+
+        tools_list = kwargs.pop("tools", [])
+
+        request = ProviderRequest(
+            messages=messages,
+            system=system,
+            tools=tools_list,
+            **kwargs,
+        )
+
+        try:
+            # Use the provider's stream method
+            raw_stream = self._provider.stream(request)
+            return raw_stream
+        except Exception:
+            # Fallback to non-streaming
+            try:
+                response = await self._provider.generate(request)
+                return response
+            except Exception as exc:
+                raise ProviderExecutionError(
+                    message=f"Provider execution failed at iteration {self._iteration_count}: {exc}",
+                    original_exception=exc if isinstance(exc, Exception) else None,
+                    details={
+                        "iteration": self._iteration_count,
+                        "provider_requests": self._provider_requests,
+                    },
+                ) from exc
