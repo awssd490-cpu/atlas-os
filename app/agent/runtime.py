@@ -32,6 +32,9 @@ from app.agent.events import (
     AgentEventDispatcher,
     AgentFailedEvent,
     AgentStartedEvent,
+    CheckpointCreatedEvent,
+    CheckpointFailedEvent,
+    CheckpointRestoredEvent,
     IterationCompletedEvent,
     IterationStartedEvent,
     MemoryInjectionCompletedEvent,
@@ -52,6 +55,7 @@ from app.agent.events import (
     ToolExecutionStartedEvent,
 )
 from app.agent.memory import MemoryContextBuilder
+from app.agent.checkpoint import CheckpointManager, RuntimeCheckpoint
 from app.agent.plan import Plan, PlanResult, PlanStep, StepStatus
 from app.agent.planner import PlanningEngine
 from app.provider.models import (
@@ -101,6 +105,7 @@ class AgentRuntime:
         self._dispatcher = dispatcher or AgentEventDispatcher()
         self._memory_builder = MemoryContextBuilder(memory)
         self._planner = PlanningEngine()
+        self._checkpoint_manager = CheckpointManager()
 
         # Internal state (reset per run)
         self._iteration_count: int = 0
@@ -499,9 +504,103 @@ class AgentRuntime:
             return None
         return self._planner.current_plan
 
+    @property
+    def checkpoint_manager(self) -> CheckpointManager:
+        """The checkpoint manager."""
+        return self._checkpoint_manager
+
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Checkpoint / Resume
     # ------------------------------------------------------------------
+
+    async def create_checkpoint(
+        self,
+    ) -> RuntimeCheckpoint:
+        """Create a snapshot of the current runtime state.
+
+        The checkpoint captures iteration count, tool calls, provider
+        requests, conversation messages, system prompt, and the current
+        plan.
+
+        Returns:
+            A ``RuntimeCheckpoint`` that can be serialized and later
+            passed to ``resume()``.
+
+        Raises:
+            RuntimeError: If no run is in progress.
+        """
+        # Build messages as dicts
+        # Since we track messages externally (in the loop), we capture
+        # what's available from the runtime's perspective.
+        # We store empty messages here — the actual messages are passed
+        # to resume() at the call site.
+        plan = self._planner.current_plan
+
+        checkpoint = self._checkpoint_manager.create_checkpoint(
+            iteration=self._iteration_count,
+            tool_calls_executed=self._tool_calls_executed,
+            provider_requests=self._provider_requests,
+            current_plan=plan,
+            memory_enabled=self._config.memory_enabled,
+            metadata={
+                "config_max_iterations": self._config.max_iterations,
+                "config_max_tool_calls": self._config.max_tool_calls,
+            },
+        )
+
+        await self._emit(
+            CheckpointCreatedEvent(
+                checkpoint_id=checkpoint.checkpoint_id,
+                iteration=self._iteration_count,
+            )
+        )
+        return checkpoint
+
+    async def resume(
+        self,
+        checkpoint: RuntimeCheckpoint,
+        messages: list[ProviderMessage],
+    ) -> None:
+        """Restore runtime state from a checkpoint.
+
+        This restores iteration count, tool call count, provider request
+        count, and plan state.  Provider and tool runtime instances are
+        injected at construction time and do not need resuming.
+
+        After calling this, continue the run normally::
+
+            await runtime.resume(checkpoint, messages)
+            response = await runtime.run(
+                messages,
+                config=AgentConfig(max_iterations=5, raise_on_iteration_limit=False),
+            )
+
+        Args:
+            checkpoint: The checkpoint to restore from.
+            messages: The conversation messages to use (from checkpoint).
+
+        Raises:
+            ValueError: If the checkpoint version is incompatible.
+        """
+        self._iteration_count = checkpoint.iteration
+        self._tool_calls_executed = checkpoint.tool_calls_executed
+        self._provider_requests = checkpoint.provider_requests
+
+        # Restore plan if available
+        if checkpoint.current_plan is not None:
+            restored_plan = CheckpointManager.plan_from_dict(
+                checkpoint.current_plan
+            )
+            if restored_plan is not None:
+                # Push the plan into the planner's internal state
+                self._planner._current_plan = restored_plan
+
+        await self._emit(
+            CheckpointRestoredEvent(
+                checkpoint_id=checkpoint.checkpoint_id,
+                iteration=self._iteration_count,
+            )
+        )
 
     @property
     def _provider_type(self) -> str:

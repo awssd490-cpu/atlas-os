@@ -45,6 +45,10 @@ PROVIDER_STREAM_STARTED = "provider_stream_started"
 PROVIDER_CHUNK_RECEIVED = "provider_chunk_received"
 PROVIDER_STREAM_COMPLETED = "provider_stream_completed"
 PROVIDER_STREAM_FAILED = "provider_stream_failed"
+CHECKPOINT_CREATED = "checkpoint_created"
+CHECKPOINT_RESTORED = "checkpoint_restored"
+CHECKPOINT_SAVED = "checkpoint_saved"
+CHECKPOINT_FAILED = "checkpoint_failed"
 
 
 # ---------------------------------------------------------------------------
@@ -602,6 +606,105 @@ class ProviderStreamFailedEvent(AgentEvent):
         object.__setattr__(self, "error", error)
         object.__setattr__(self, "error_type", error_type)
         object.__setattr__(self, "chunk_index", chunk_index)
+
+
+@dataclass(frozen=True)
+class CheckpointCreatedEvent(AgentEvent):
+    """Emitted when a checkpoint is created."""
+
+    event_type: str = CHECKPOINT_CREATED
+    checkpoint_id: str = ""
+    iteration: int = 0
+
+    def __init__(
+        self,
+        *,
+        checkpoint_id: str,
+        iteration: int = 0,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=CHECKPOINT_CREATED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "checkpoint_id", checkpoint_id)
+        object.__setattr__(self, "iteration", iteration)
+
+
+@dataclass(frozen=True)
+class CheckpointRestoredEvent(AgentEvent):
+    """Emitted when a checkpoint is restored."""
+
+    event_type: str = CHECKPOINT_RESTORED
+    checkpoint_id: str = ""
+    iteration: int = 0
+
+    def __init__(
+        self,
+        *,
+        checkpoint_id: str,
+        iteration: int = 0,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=CHECKPOINT_RESTORED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "checkpoint_id", checkpoint_id)
+        object.__setattr__(self, "iteration", iteration)
+
+
+@dataclass(frozen=True)
+class CheckpointSavedEvent(AgentEvent):
+    """Emitted when a checkpoint is saved."""
+
+    event_type: str = CHECKPOINT_SAVED
+    checkpoint_id: str = ""
+
+    def __init__(
+        self,
+        *,
+        checkpoint_id: str,
+        iteration: int = 0,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=CHECKPOINT_SAVED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "checkpoint_id", checkpoint_id)
+
+
+@dataclass(frozen=True)
+class CheckpointFailedEvent(AgentEvent):
+    """Emitted when checkpoint creation or restoration fails."""
+
+    event_type: str = CHECKPOINT_FAILED
+    error: str = ""
+    error_type: str = ""
+
+    def __init__(
+        self,
+        *,
+        error: str,
+        error_type: str = "",
+        iteration: int = 0,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=CHECKPOINT_FAILED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "error", error)
+        object.__setattr__(self, "error_type", error_type)
 
 
 @dataclass(frozen=True)

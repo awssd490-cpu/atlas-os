@@ -51,6 +51,12 @@ class AgentConfig:
             Default 1 (yield every chunk).
         emit_thinking_chunks: If ``True``, emit thinking chunks (if the
             provider supports them).  Default ``True``.
+        checkpoint_enabled: If ``True`` (default), enable checkpoint
+            creation during agent execution.
+        checkpoint_frequency: When to create checkpoints automatically.
+            ``"manual"`` (default) — only on explicit calls.
+            ``"iteration"`` — after each reasoning iteration.
+            ``"provider_response"`` — after each provider response.
     """
 
     max_iterations: int = 10
@@ -67,6 +73,8 @@ class AgentConfig:
     streaming_enabled: bool = True
     chunk_buffer_size: int = 1
     emit_thinking_chunks: bool = True
+    checkpoint_enabled: bool = True
+    checkpoint_frequency: str = "manual"
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
@@ -100,6 +108,12 @@ class AgentConfig:
             raise ValueError(
                 f"chunk_buffer_size must be >= 1, got {self.chunk_buffer_size}"
             )
+        valid_freq = ("manual", "iteration", "provider_response")
+        if self.checkpoint_frequency not in valid_freq:
+            raise ValueError(
+                f"checkpoint_frequency must be one of {valid_freq}, "
+                f"got {self.checkpoint_frequency!r}"
+            )
 
     @classmethod
     def default(cls) -> "AgentConfig":
@@ -123,4 +137,6 @@ class AgentConfig:
             "streaming_enabled": self.streaming_enabled,
             "chunk_buffer_size": self.chunk_buffer_size,
             "emit_thinking_chunks": self.emit_thinking_chunks,
+            "checkpoint_enabled": self.checkpoint_enabled,
+            "checkpoint_frequency": self.checkpoint_frequency,
         }
