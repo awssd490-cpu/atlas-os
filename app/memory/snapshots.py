@@ -93,7 +93,7 @@ class SnapshotRepository:
         offset: int = 0,
     ) -> list[_SnapshotRow]:
         rows = await self._conn.fetchall(
-            "SELECT * FROM memory_snapshots ORDER BY created_at DESC LIMIT :limit OFFSET :offset",
+            "SELECT * FROM memory_snapshots ORDER BY created_at DESC, id DESC LIMIT :limit OFFSET :offset",
             {"limit": limit, "offset": offset},
         )
         return [_SnapshotRow(**r) for r in rows]
