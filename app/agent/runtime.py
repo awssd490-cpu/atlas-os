@@ -17,6 +17,7 @@ Ownership boundaries:
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 from app.agent.config import AgentConfig
@@ -24,6 +25,19 @@ from app.agent.errors import (
     IterationLimitExceeded,
     ProviderExecutionError,
     ToolCallLimitExceeded,
+)
+from app.agent.events import (
+    AgentCompletedEvent,
+    AgentEvent,
+    AgentEventDispatcher,
+    AgentFailedEvent,
+    AgentStartedEvent,
+    IterationCompletedEvent,
+    IterationStartedEvent,
+    ProviderRequestStartedEvent,
+    ProviderResponseReceivedEvent,
+    ToolExecutionFinishedEvent,
+    ToolExecutionStartedEvent,
 )
 from app.provider.models import ProviderMessage, ProviderRequest, ProviderResponse
 from app.provider.provider import Provider
@@ -39,6 +53,10 @@ class AgentRuntime:
     back into provider messages, and repeats until the provider returns
     a final response (one without tool calls).
 
+    The runtime optionally accepts an ``AgentEventDispatcher`` for
+    observing execution in real time.  It also supports async iteration
+    via ``stream()``.
+
     Usage::
 
         runtime = AgentRuntime(provider, tool_runtime)
@@ -51,10 +69,12 @@ class AgentRuntime:
         provider: Provider,
         tool_runtime: ToolRuntime,
         config: AgentConfig | None = None,
+        dispatcher: AgentEventDispatcher | None = None,
     ) -> None:
         self._provider = provider
         self._tool_runtime = tool_runtime
         self._config = config or AgentConfig.default()
+        self._dispatcher = dispatcher or AgentEventDispatcher()
 
         # Internal state (reset per run)
         self._iteration_count: int = 0
@@ -62,9 +82,10 @@ class AgentRuntime:
         self._provider_requests: int = 0
         self._start_time: float = 0.0
         self._elapsed_time: float = 0.0
+        self._last_stream_response: ProviderResponse | None = None
 
     # ------------------------------------------------------------------
-    # Public API
+    # Public API — non-streaming
     # ------------------------------------------------------------------
 
     async def run(
@@ -75,7 +96,7 @@ class AgentRuntime:
         system: str = "",
         **request_kwargs: Any,
     ) -> ProviderResponse:
-        """Run the reasoning loop.
+        """Run the reasoning loop (non-streaming).
 
         Sends *messages* (and optional *system* prompt) to the provider,
         then iterates: extract tool calls → execute tools → send results
@@ -83,6 +104,9 @@ class AgentRuntime:
         no tool calls.
 
         The caller's ``request_kwargs`` dict is never mutated.
+
+        If a dispatcher was provided at construction time, events are
+        emitted during execution.
 
         Args:
             messages: The initial conversation messages.
@@ -114,14 +138,204 @@ class AgentRuntime:
         self._elapsed_time = 0.0
 
         try:
-            return await self._loop(
-                active_messages,
-                resolved_config,
-                system,
-                kwargs,
+            await self._emit(AgentStartedEvent())
+            return await self._loop(active_messages, resolved_config, system, kwargs)
+        except Exception as exc:
+            await self._emit(
+                AgentFailedEvent(
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    iteration=self._iteration_count,
+                )
             )
+            raise
         finally:
             self._elapsed_time = time.monotonic() - self._start_time
+            self._last_stream_response = None
+
+    # ------------------------------------------------------------------
+    # Public API — streaming
+    # ------------------------------------------------------------------
+
+    async def stream(
+        self,
+        messages: list[ProviderMessage],
+        *,
+        config: AgentConfig | None = None,
+        system: str = "",
+        **request_kwargs: Any,
+    ) -> AsyncIterator[AgentEvent | ProviderResponse]:
+        """Run the reasoning loop as an async event stream.
+
+        Yields ``AgentEvent`` objects as the loop progresses, then
+        yields the final ``ProviderResponse``.
+
+        Args:
+            messages: The initial conversation messages.
+            config: Optional per-run configuration override.
+            system: Optional system prompt.
+            **request_kwargs: Additional keyword arguments forwarded to
+                ``ProviderRequest``.
+
+        Yields:
+            ``AgentEvent`` objects during execution, then the final
+            ``ProviderResponse`` at completion.
+        """
+        resolved_config = config or self._config
+        active_messages = list(messages)
+        kwargs = dict(request_kwargs)
+
+        self._iteration_count = 0
+        self._tool_calls_executed = 0
+        self._provider_requests = 0
+        self._start_time = time.monotonic()
+        self._elapsed_time = 0.0
+        self._last_stream_response = None
+
+        try:
+            async for event in self._stream_inner(
+                active_messages, resolved_config, system, kwargs,
+            ):
+                yield event
+        except Exception as exc:
+            yield AgentFailedEvent(
+                error=str(exc),
+                error_type=type(exc).__name__,
+                iteration=self._iteration_count,
+            )
+            raise
+        finally:
+            self._elapsed_time = time.monotonic() - self._start_time
+
+    async def _stream_inner(
+        self,
+        messages: list[ProviderMessage],
+        config: AgentConfig,
+        system: str,
+        kwargs: dict[str, Any],
+    ) -> AsyncIterator[AgentEvent | ProviderResponse]:
+        """Internal streaming coroutine.
+
+        Yields every event plus the final response.
+        """
+        yield AgentStartedEvent()
+        await self._emit(AgentStartedEvent())
+
+        last_response: ProviderResponse | None = None
+
+        for iteration in range(config.max_iterations):
+            self._iteration_count = iteration + 1
+
+            event = IterationStartedEvent(iteration=self._iteration_count)
+            yield event
+            await self._emit(event)
+
+            # 1. Call the provider
+            event = ProviderRequestStartedEvent(
+                iteration=self._iteration_count,
+                message_count=len(messages),
+            )
+            yield event
+            await self._emit(event)
+
+            response = await self._call_provider(messages, system, kwargs)
+            last_response = response
+
+            event = ProviderResponseReceivedEvent(
+                iteration=self._iteration_count,
+                content_length=len(response.content),
+                tool_call_count=len(response.tool_calls),
+            )
+            yield event
+            await self._emit(event)
+
+            # 2. Extract tool calls
+            tool_calls = extract_tool_calls(response)
+
+            # 3. No tool calls → final response
+            if not tool_calls:
+                event = AgentCompletedEvent(
+                    iteration=self._iteration_count,
+                    total_iterations=self._iteration_count,
+                    total_tool_calls=self._tool_calls_executed,
+                    total_provider_requests=self._provider_requests,
+                )
+                yield event
+                await self._emit(event)
+                self._last_stream_response = response
+                yield response
+                return
+
+            # 4. Check tool call limit before executing
+            if self._tool_calls_executed + len(tool_calls) > config.max_tool_calls:
+                raise ToolCallLimitExceeded(
+                    max_tool_calls=config.max_tool_calls,
+                    details={
+                        "iteration": iteration + 1,
+                        "tool_calls_executed": self._tool_calls_executed,
+                        "pending_tool_calls": len(tool_calls),
+                    },
+                )
+
+            # 5. Append assistant message with tool calls to conversation
+            assistant_msg = ProviderMessage(
+                role="assistant",
+                content=response.content,
+                tool_calls=response.tool_calls,
+            )
+            messages.append(assistant_msg)
+
+            # 6. Execute tool calls and format results
+            for tc in tool_calls:
+                event = ToolExecutionStartedEvent(
+                    iteration=self._iteration_count,
+                    tool_name=tc.name,
+                    tool_call_id=tc.id,
+                )
+                yield event
+                await self._emit(event)
+
+            tool_messages = await execute_tool_calls(
+                tool_calls,
+                self._tool_runtime,
+                provider_type=self._provider_type,
+            )
+
+            for i, msg in enumerate(tool_messages):
+                tc = tool_calls[i] if i < len(tool_calls) else None
+                event = ToolExecutionFinishedEvent(
+                    iteration=self._iteration_count,
+                    tool_name=tc.name if tc else "",
+                    tool_call_id=tc.id if tc else "",
+                    success=(msg.content != ""),
+                )
+                yield event
+                await self._emit(event)
+
+            # 7. Append tool results to conversation
+            messages.extend(tool_messages)
+            self._tool_calls_executed += len(tool_calls)
+
+            event = IterationCompletedEvent(
+                iteration=self._iteration_count,
+                tool_calls_in_iteration=len(tool_calls),
+            )
+            yield event
+            await self._emit(event)
+
+        # Iteration limit reached
+        result = self._handle_iteration_limit(config, last_response)
+        event = AgentCompletedEvent(
+            iteration=self._iteration_count,
+            total_iterations=self._iteration_count,
+            total_tool_calls=self._tool_calls_executed,
+            total_provider_requests=self._provider_requests,
+        )
+        yield event
+        await self._emit(event)
+
+        self._last_stream_response = result
+        yield result
 
     # ------------------------------------------------------------------
     # Internal state properties
@@ -162,6 +376,11 @@ class AgentRuntime:
         """The agent configuration."""
         return self._config
 
+    @property
+    def dispatcher(self) -> AgentEventDispatcher:
+        """The event dispatcher."""
+        return self._dispatcher
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -179,6 +398,11 @@ class AgentRuntime:
             return "claude"
         return "openai"
 
+    async def _emit(self, event: AgentEvent) -> None:
+        """Emit an event to the registered dispatcher, if any."""
+        if self._dispatcher is not None:
+            await self._dispatcher.emit(event)
+
     # ------------------------------------------------------------------
     # Internal loop
     # ------------------------------------------------------------------
@@ -190,21 +414,48 @@ class AgentRuntime:
         system: str,
         kwargs: dict[str, Any],
     ) -> ProviderResponse:
-        """Core reasoning loop."""
+        """Core reasoning loop (non-streaming).
+
+        Emits events via the dispatcher but does not yield them.
+        """
         last_response: ProviderResponse | None = None
 
         for iteration in range(config.max_iterations):
             self._iteration_count = iteration + 1
 
+            await self._emit(IterationStartedEvent(iteration=self._iteration_count))
+
             # 1. Call the provider
+            await self._emit(
+                ProviderRequestStartedEvent(
+                    iteration=self._iteration_count,
+                    message_count=len(messages),
+                )
+            )
             response = await self._call_provider(messages, system, kwargs)
             last_response = response
+
+            await self._emit(
+                ProviderResponseReceivedEvent(
+                    iteration=self._iteration_count,
+                    content_length=len(response.content),
+                    tool_call_count=len(response.tool_calls),
+                )
+            )
 
             # 2. Extract tool calls
             tool_calls = extract_tool_calls(response)
 
             # 3. No tool calls → final response
             if not tool_calls:
+                await self._emit(
+                    AgentCompletedEvent(
+                        iteration=self._iteration_count,
+                        total_iterations=self._iteration_count,
+                        total_tool_calls=self._tool_calls_executed,
+                        total_provider_requests=self._provider_requests,
+                    )
+                )
                 return response
 
             # 4. Check tool call limit before executing
@@ -227,18 +478,54 @@ class AgentRuntime:
             messages.append(assistant_msg)
 
             # 6. Execute tool calls and format results
+            for tc in tool_calls:
+                await self._emit(
+                    ToolExecutionStartedEvent(
+                        iteration=self._iteration_count,
+                        tool_name=tc.name,
+                        tool_call_id=tc.id,
+                    )
+                )
+
             tool_messages = await execute_tool_calls(
                 tool_calls,
                 self._tool_runtime,
                 provider_type=self._provider_type,
             )
 
+            for i, msg in enumerate(tool_messages):
+                tc = tool_calls[i] if i < len(tool_calls) else None
+                await self._emit(
+                    ToolExecutionFinishedEvent(
+                        iteration=self._iteration_count,
+                        tool_name=tc.name if tc else "",
+                        tool_call_id=tc.id if tc else "",
+                        success=(msg.content != ""),
+                    )
+                )
+
             # 7. Append tool results to conversation
             messages.extend(tool_messages)
             self._tool_calls_executed += len(tool_calls)
 
+            await self._emit(
+                IterationCompletedEvent(
+                    iteration=self._iteration_count,
+                    tool_calls_in_iteration=len(tool_calls),
+                )
+            )
+
         # Iteration limit reached — delegate to helper
-        return self._handle_iteration_limit(config, last_response)
+        result = self._handle_iteration_limit(config, last_response)
+        await self._emit(
+            AgentCompletedEvent(
+                iteration=self._iteration_count,
+                total_iterations=self._iteration_count,
+                total_tool_calls=self._tool_calls_executed,
+                total_provider_requests=self._provider_requests,
+            )
+        )
+        return result
 
     def _handle_iteration_limit(
         self,
@@ -254,9 +541,6 @@ class AgentRuntime:
         - If ``return_partial_response`` is ``True`` AND a real provider
           response exists, that response is returned with metadata flags.
         - Otherwise an exception is still raised.
-
-        This method consolidates three code paths that previously existed
-        inline in the loop.
         """
         if config.raise_on_iteration_limit:
             raise IterationLimitExceeded(
@@ -268,7 +552,6 @@ class AgentRuntime:
             )
 
         if config.return_partial_response and last_response is not None:
-            # Preserve the real provider output, augment with metadata
             meta = dict(last_response.metadata)
             meta.update({
                 "partial": True,
@@ -306,7 +589,6 @@ class AgentRuntime:
         """
         self._provider_requests += 1
 
-        # Pop 'tools' from the local copy — safe because we own kwargs
         tools_list = kwargs.pop("tools", [])
 
         request = ProviderRequest(

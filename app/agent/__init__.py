@@ -25,6 +25,20 @@ Usage::
         config=AgentConfig(max_iterations=5),
     )
     response = await runtime.run(messages)
+
+With event observers::
+
+    dispatcher = AgentEventDispatcher()
+    dispatcher.add_listener(print)
+
+    runtime = AgentRuntime(provider, tool_runtime, dispatcher=dispatcher)
+    await runtime.run(messages)
+
+With streaming::
+
+    async for event in runtime.stream(messages):
+        if isinstance(event, ProviderResponseReceivedEvent):
+            print(f"Content: {event.content_length} chars")
 """
 
 from __future__ import annotations
@@ -40,12 +54,39 @@ if TYPE_CHECKING:
         ToolCallLimitExceeded,
         ProviderExecutionError,
     )
+    from app.agent.events import (
+        AgentEvent,
+        AgentEventDispatcher,
+        AgentStartedEvent,
+        IterationStartedEvent,
+        ProviderRequestStartedEvent,
+        ProviderResponseReceivedEvent,
+        ToolExecutionStartedEvent,
+        ToolExecutionFinishedEvent,
+        IterationCompletedEvent,
+        AgentCompletedEvent,
+        AgentFailedEvent,
+    )
 
 __all__ = [
+    # Core
     "AgentRuntime",
     "AgentConfig",
+    # Errors
     "AgentError",
     "IterationLimitExceeded",
     "ToolCallLimitExceeded",
     "ProviderExecutionError",
+    # Events
+    "AgentEvent",
+    "AgentEventDispatcher",
+    "AgentStartedEvent",
+    "IterationStartedEvent",
+    "ProviderRequestStartedEvent",
+    "ProviderResponseReceivedEvent",
+    "ToolExecutionStartedEvent",
+    "ToolExecutionFinishedEvent",
+    "IterationCompletedEvent",
+    "AgentCompletedEvent",
+    "AgentFailedEvent",
 ]
