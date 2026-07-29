@@ -49,6 +49,8 @@ CHECKPOINT_CREATED = "checkpoint_created"
 CHECKPOINT_RESTORED = "checkpoint_restored"
 CHECKPOINT_SAVED = "checkpoint_saved"
 CHECKPOINT_FAILED = "checkpoint_failed"
+PARALLEL_TOOL_STARTED = "parallel_tool_started"
+PARALLEL_TOOL_COMPLETED = "parallel_tool_completed"
 
 
 # ---------------------------------------------------------------------------
@@ -731,6 +733,64 @@ class AgentFailedEvent(AgentEvent):
         )
         object.__setattr__(self, "error", error)
         object.__setattr__(self, "error_type", error_type)
+
+
+@dataclass(frozen=True)
+class ParallelToolStartedEvent(AgentEvent):
+    """Emitted when a parallel tool execution starts."""
+
+    event_type: str = PARALLEL_TOOL_STARTED
+    tool_name: str = ""
+    tool_call_id: str = ""
+    total_calls: int = 0
+
+    def __init__(
+        self,
+        *,
+        iteration: int,
+        tool_name: str,
+        tool_call_id: str,
+        total_calls: int = 0,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=PARALLEL_TOOL_STARTED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "tool_name", tool_name)
+        object.__setattr__(self, "tool_call_id", tool_call_id)
+        object.__setattr__(self, "total_calls", total_calls)
+
+
+@dataclass(frozen=True)
+class ParallelToolCompletedEvent(AgentEvent):
+    """Emitted when a tool call in a parallel batch completes."""
+
+    event_type: str = PARALLEL_TOOL_COMPLETED
+    tool_name: str = ""
+    tool_call_id: str = ""
+    success: bool = True
+
+    def __init__(
+        self,
+        *,
+        iteration: int,
+        tool_name: str,
+        tool_call_id: str,
+        success: bool = True,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=PARALLEL_TOOL_COMPLETED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "tool_name", tool_name)
+        object.__setattr__(self, "tool_call_id", tool_call_id)
+        object.__setattr__(self, "success", success)
 
 
 # ---------------------------------------------------------------------------

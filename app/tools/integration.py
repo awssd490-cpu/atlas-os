@@ -27,6 +27,9 @@ from typing import Any
 from app.provider.models import ProviderMessage, ProviderResponse, Role, ToolCallRequest
 from app.tools.models import ToolCall, ToolResult
 
+# Lazy import for ParallelToolExecutor to avoid circular deps
+_parallel_executor: Any | None = None
+
 
 # ---------------------------------------------------------------------------
 # Extraction: ProviderResponse → ToolCall list
@@ -140,8 +143,13 @@ async def execute_tool_calls(
     runtime: Any,
     *,
     provider_type: str = "openai",
+    parallel: bool = False,
+    max_parallel: int = 8,
 ) -> list[ProviderMessage]:
     """Execute a list of tool calls and return formatted ``ProviderMessage`` objects.
+
+    When *parallel* is ``True``, independent tool calls execute
+    concurrently.  Results are always returned in the original order.
 
     One tool request.  One execution.  One tool response.
     No automatic looping.
@@ -150,11 +158,32 @@ async def execute_tool_calls(
         tool_calls: The tool calls to execute.
         runtime: A ``ToolRuntime`` instance.
         provider_type: ``"openai"`` or ``"claude"`` for formatting.
+        parallel: If ``True``, use parallel execution.
+        max_parallel: Maximum concurrent tool calls.
 
     Returns:
         A list of ``ProviderMessage`` objects containing tool results,
-        one per tool call.
+        one per tool call, in the original tool call order.
     """
+    if not tool_calls:
+        return []
+
+    if parallel and len(tool_calls) > 1:
+        # Use ParallelToolExecutor
+        from app.tools.parallel import ParallelToolExecutor, ExecutionStrategy
+
+        executor = ParallelToolExecutor(
+            runtime,
+            max_parallel=max_parallel,
+            strategy=ExecutionStrategy.AUTO,
+        )
+        exec_result = await executor.execute(tool_calls)
+        return [
+            format_tool_result(tc, exec_result.results[i], provider_type=provider_type)
+            for i, tc in enumerate(tool_calls)
+        ]
+
+    # Sequential (default)
     messages: list[ProviderMessage] = []
     for tc in tool_calls:
         result = await runtime.execute(tc)

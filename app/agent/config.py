@@ -57,6 +57,13 @@ class AgentConfig:
             ``"manual"`` (default) — only on explicit calls.
             ``"iteration"`` — after each reasoning iteration.
             ``"provider_response"`` — after each provider response.
+        parallel_tools_enabled: If ``True`` (default), execute independent
+            tool calls concurrently.
+        max_parallel_tools: Maximum concurrent tool calls.  Default 8.
+        execution_strategy: Strategy for tool execution.
+            ``"auto"`` (default) — parallel when independent.
+            ``"parallel"`` — always parallel.
+            ``"sequential"`` — always sequential (backward compatible).
     """
 
     max_iterations: int = 10
@@ -75,6 +82,9 @@ class AgentConfig:
     emit_thinking_chunks: bool = True
     checkpoint_enabled: bool = True
     checkpoint_frequency: str = "manual"
+    parallel_tools_enabled: bool = True
+    max_parallel_tools: int = 8
+    execution_strategy: str = "auto"
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
@@ -107,6 +117,16 @@ class AgentConfig:
         if self.chunk_buffer_size < 1:
             raise ValueError(
                 f"chunk_buffer_size must be >= 1, got {self.chunk_buffer_size}"
+            )
+        if self.max_parallel_tools < 1:
+            raise ValueError(
+                f"max_parallel_tools must be >= 1, got {self.max_parallel_tools}"
+            )
+        valid_strategies = ("auto", "parallel", "sequential")
+        if self.execution_strategy not in valid_strategies:
+            raise ValueError(
+                f"execution_strategy must be one of {valid_strategies}, "
+                f"got {self.execution_strategy!r}"
             )
         valid_freq = ("manual", "iteration", "provider_response")
         if self.checkpoint_frequency not in valid_freq:

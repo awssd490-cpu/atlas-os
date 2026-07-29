@@ -405,6 +405,8 @@ class AgentRuntime:
                 tool_calls,
                 self._tool_runtime,
                 provider_type=self._provider_type,
+                parallel=config.parallel_tools_enabled,
+                max_parallel=config.max_parallel_tools,
             )
 
             for i, msg in enumerate(tool_messages):
@@ -969,6 +971,8 @@ class AgentRuntime:
                 tool_calls,
                 self._tool_runtime,
                 provider_type=self._provider_type,
+                parallel=config.parallel_tools_enabled,
+                max_parallel=config.max_parallel_tools,
             )
 
             for i, msg in enumerate(tool_messages):
