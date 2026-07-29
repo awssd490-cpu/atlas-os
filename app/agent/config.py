@@ -74,6 +74,11 @@ class AgentConfig:
         retry_initial_delay: Initial delay in seconds.  Default 0.5.
         retry_max_delay: Maximum delay in seconds.  Default 8.0.
         retry_jitter: Whether to add jitter to delays.  Default True.
+        rag_enabled: If ``True`` (default), enable knowledge retrieval
+            and injection before provider requests.
+        max_knowledge_chunks: Maximum knowledge chunks to retrieve per
+            request.  Default 10.
+        max_chunk_length: Maximum character length per chunk.  Default 1000.
     """
 
     max_iterations: int = 10
@@ -101,6 +106,9 @@ class AgentConfig:
     retry_initial_delay: float = 0.5
     retry_max_delay: float = 8.0
     retry_jitter: bool = True
+    rag_enabled: bool = True
+    max_knowledge_chunks: int = 10
+    max_chunk_length: int = 1000
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
@@ -166,6 +174,14 @@ class AgentConfig:
                 f"retry_max_delay ({self.retry_max_delay}) must be >= "
                 f"retry_initial_delay ({self.retry_initial_delay})"
             )
+        if self.max_knowledge_chunks < 1:
+            raise ValueError(
+                f"max_knowledge_chunks must be >= 1, got {self.max_knowledge_chunks}"
+            )
+        if self.max_chunk_length < 1:
+            raise ValueError(
+                f"max_chunk_length must be >= 1, got {self.max_chunk_length}"
+            )
         valid_freq = ("manual", "iteration", "provider_response")
         if self.checkpoint_frequency not in valid_freq:
             raise ValueError(
@@ -203,4 +219,7 @@ class AgentConfig:
             "retry_initial_delay": self.retry_initial_delay,
             "retry_max_delay": self.retry_max_delay,
             "retry_jitter": self.retry_jitter,
+            "rag_enabled": self.rag_enabled,
+            "max_knowledge_chunks": self.max_knowledge_chunks,
+            "max_chunk_length": self.max_chunk_length,
         }

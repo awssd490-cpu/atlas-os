@@ -56,6 +56,10 @@ RETRY_ATTEMPT = "retry_attempt"
 RETRY_SUCCEEDED = "retry_succeeded"
 RETRY_FAILED = "retry_failed"
 RETRY_EXHAUSTED = "retry_exhausted"
+KNOWLEDGE_SEARCH_STARTED = "knowledge_search_started"
+KNOWLEDGE_SEARCH_COMPLETED = "knowledge_search_completed"
+KNOWLEDGE_DOCUMENT_RETRIEVED = "knowledge_document_retrieved"
+KNOWLEDGE_CONTEXT_BUILT = "knowledge_context_built"
 
 
 # ---------------------------------------------------------------------------
@@ -938,6 +942,101 @@ class RetryExhaustedEvent(AgentEvent):
         object.__setattr__(self, "total_delay", total_delay)
         object.__setattr__(self, "error", error)
         object.__setattr__(self, "error_type", error_type)
+
+
+@dataclass(frozen=True)
+class KnowledgeSearchStartedEvent(AgentEvent):
+    """Emitted when a knowledge search begins."""
+
+    event_type: str = KNOWLEDGE_SEARCH_STARTED
+    query: str = ""
+
+    def __init__(
+        self,
+        *,
+        iteration: int = 0,
+        query: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=KNOWLEDGE_SEARCH_STARTED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "query", query)
+
+
+@dataclass(frozen=True)
+class KnowledgeSearchCompletedEvent(AgentEvent):
+    """Emitted when a knowledge search completes."""
+
+    event_type: str = KNOWLEDGE_SEARCH_COMPLETED
+    chunks_found: int = 0
+
+    def __init__(
+        self,
+        *,
+        iteration: int = 0,
+        chunks_found: int = 0,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=KNOWLEDGE_SEARCH_COMPLETED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "chunks_found", chunks_found)
+
+
+@dataclass(frozen=True)
+class KnowledgeDocumentRetrievedEvent(AgentEvent):
+    """Emitted when a knowledge document is retrieved."""
+
+    event_type: str = KNOWLEDGE_DOCUMENT_RETRIEVED
+    document_id: str = ""
+    title: str = ""
+
+    def __init__(
+        self,
+        *,
+        iteration: int = 0,
+        document_id: str = "",
+        title: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=KNOWLEDGE_DOCUMENT_RETRIEVED,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "document_id", document_id)
+        object.__setattr__(self, "title", title)
+
+
+@dataclass(frozen=True)
+class KnowledgeContextBuiltEvent(AgentEvent):
+    """Emitted when knowledge context is built."""
+
+    event_type: str = KNOWLEDGE_CONTEXT_BUILT
+    total_chunks: int = 0
+
+    def __init__(
+        self,
+        *,
+        iteration: int = 0,
+        total_chunks: int = 0,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            event_type=KNOWLEDGE_CONTEXT_BUILT,
+            timestamp=time.time(),
+            iteration=iteration,
+            metadata=metadata or {},
+        )
+        object.__setattr__(self, "total_chunks", total_chunks)
 
 
 # ---------------------------------------------------------------------------

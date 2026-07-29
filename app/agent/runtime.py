@@ -37,6 +37,9 @@ from app.agent.events import (
     CheckpointRestoredEvent,
     IterationCompletedEvent,
     IterationStartedEvent,
+    KnowledgeContextBuiltEvent,
+    KnowledgeSearchCompletedEvent,
+    KnowledgeSearchStartedEvent,
     MemoryInjectionCompletedEvent,
     MemoryRetrievalCompletedEvent,
     MemoryRetrievalStartedEvent,
@@ -55,6 +58,8 @@ from app.agent.events import (
     ToolExecutionStartedEvent,
 )
 from app.agent.memory import MemoryContextBuilder
+from app.rag.context import KnowledgeContextBuilder
+from app.rag.knowledge_base import KnowledgeBase
 from app.agent.checkpoint import CheckpointManager, RuntimeCheckpoint
 from app.agent.plan import Plan, PlanResult, PlanStep, StepStatus
 from app.agent.planner import PlanningEngine
@@ -98,6 +103,7 @@ class AgentRuntime:
         config: AgentConfig | None = None,
         dispatcher: AgentEventDispatcher | None = None,
         memory: MemorySearchService | None = None,
+        knowledge_base: KnowledgeBase | None = None,
     ) -> None:
         self._provider = provider
         self._tool_runtime = tool_runtime
@@ -106,6 +112,7 @@ class AgentRuntime:
         self._memory_builder = MemoryContextBuilder(memory)
         self._planner = PlanningEngine()
         self._checkpoint_manager = CheckpointManager()
+        self._knowledge_builder = KnowledgeContextBuilder(knowledge_base)
 
         # Internal state (reset per run)
         self._iteration_count: int = 0
@@ -650,13 +657,6 @@ class AgentRuntime:
             ``(augmented_messages, augmented_system)`` if memories were
             injected, or ``None`` if no injection was performed.
         """
-        if not config.memory_enabled:
-            return None
-
-        memory_service = self._memory_builder
-        if memory_service is None:
-            return None
-
         # Build query from the last user message
         query_text = ""
         for msg in reversed(messages):
@@ -665,52 +665,97 @@ class AgentRuntime:
                 query_text = msg.content
                 break
 
-        await self._emit(
-            MemoryRetrievalStartedEvent(
-                iteration=self._iteration_count,
-                query=query_text,
+        # Collect context parts from memory and knowledge
+        all_formatted_parts: list[str] = []
+
+        # ---- Memory retrieval ----
+        if config.memory_enabled and self._memory_builder is not None:
+            await self._emit(
+                MemoryRetrievalStartedEvent(
+                    iteration=self._iteration_count,
+                    query=query_text,
+                )
             )
-        )
 
-        memories = await memory_service.retrieve(
-            query=query_text,
-            config=config,
-        )
-
-        await self._emit(
-            MemoryRetrievalCompletedEvent(
-                iteration=self._iteration_count,
-                memory_count=len(memories),
+            memories = await self._memory_builder.retrieve(
                 query=query_text,
+                config=config,
             )
-        )
 
-        if not memories:
+            await self._emit(
+                MemoryRetrievalCompletedEvent(
+                    iteration=self._iteration_count,
+                    memory_count=len(memories),
+                    query=query_text,
+                )
+            )
+
+            if memories:
+                all_formatted_parts.append(
+                    self._memory_builder.format_as_text(memories)
+                )
+
+        # ---- Knowledge (RAG) retrieval ----
+        if config.rag_enabled and query_text:
+            await self._emit(
+                KnowledgeSearchStartedEvent(
+                    iteration=self._iteration_count,
+                    query=query_text,
+                )
+            )
+
+            try:
+                knowledge_context = await self._knowledge_builder.build(
+                    query=query_text,
+                    max_chunks=config.max_knowledge_chunks,
+                )
+
+                await self._emit(
+                    KnowledgeSearchCompletedEvent(
+                        iteration=self._iteration_count,
+                        chunks_found=knowledge_context.total_chunks,
+                    )
+                )
+
+                if knowledge_context.text:
+                    all_formatted_parts.append(knowledge_context.text)
+                    await self._emit(
+                        KnowledgeContextBuiltEvent(
+                            iteration=self._iteration_count,
+                            total_chunks=knowledge_context.total_chunks,
+                        )
+                    )
+            except Exception:
+                # Knowledge retrieval failure shouldn't crash the loop
+                await self._emit(
+                    KnowledgeSearchCompletedEvent(
+                        iteration=self._iteration_count,
+                        chunks_found=0,
+                    )
+                )
+
+        if not all_formatted_parts:
             return None
 
-        # Format memories and inject
-        formatted = memory_service.format_as_text(memories)
-        _inject_method = config.inject_memory_as
+        # Merge all formatted content
+        merged_formatted = "\n\n".join(all_formatted_parts)
         method = config.inject_memory_as
 
         if method == "system":
-            # Prepend to system prompt
-            augmented_system = f"{system}\n\n{formatted}" if system else formatted
+            augmented_system = f"{system}\n\n{merged_formatted}" if system else merged_formatted
             augmented_messages = list(messages)
 
         elif method == "assistant":
-            # Append as an assistant message
             augmented_system = system
             augmented_messages = list(messages)
             augmented_messages.append(
                 ProviderMessage(
                     role="assistant",
-                    content=f"*Context from memory:*\n{formatted}",
+                    content=f"*Context:*\n{merged_formatted}",
                 )
             )
 
         elif method == "hidden_context":
-            # Store in request metadata (handled by provider)
             augmented_system = system
             augmented_messages = list(messages)
 
@@ -721,7 +766,6 @@ class AgentRuntime:
             MemoryInjectionCompletedEvent(
                 iteration=self._iteration_count,
                 method=method,
-                metadata={"memory_count": len(memories)},
             )
         )
 
