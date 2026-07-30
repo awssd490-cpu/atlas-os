@@ -13,6 +13,11 @@ from app.rag.chunking import (
     STRATEGY_PARAGRAPH,
     STRATEGY_SLIDING_WINDOW,
 )
+from app.rag.embeddings import (
+    DeterministicEmbeddingProvider,
+    EmbeddingConfig as EmbeddingConfig_Impl,
+    MockEmbeddingProvider,
+)
 from app.rag.errors import DuplicateDocumentError
 from app.rag.knowledge_base import KnowledgeBase
 from app.rag.models import KnowledgeChunk, KnowledgeDocument, KnowledgeMetadata
@@ -464,3 +469,342 @@ class TestKnowledgeBaseChunking:
         )
         kb.register(doc)
         assert len(kb.list_chunks()) == 1
+
+
+# ======================================================================
+# Embedding integration
+# ======================================================================
+
+
+class TestKnowledgeBaseEmbeddings:
+    """Tests for the optional embedding integration in KnowledgeBase."""
+
+    def test_no_embedding_provider_by_default(self) -> None:
+        """KnowledgeBase without embedding provider — no embeddings stored."""
+        kb = KnowledgeBase(
+            chunking_config=ChunkingConfig(strategy=STRATEGY_WHOLE_DOCUMENT),
+        )
+        assert kb.embedding_provider is None
+        doc = KnowledgeDocument(document_id="d1", content="Hello world.")
+        kb.add_document(doc)
+        assert len(kb.list_embeddings()) == 0
+        assert kb.get_embedding("any_id") is None
+
+    def test_with_deterministic_provider(self) -> None:
+        """Embeddings are generated when a deterministic provider is configured."""
+        emb_config = EmbeddingConfig_Impl(
+            provider_name="deterministic",
+            dimensions=4,
+            normalize_embeddings=False,
+        )
+        provider = DeterministicEmbeddingProvider(emb_config)
+
+        kb = KnowledgeBase(
+            chunking_config=ChunkingConfig(
+                strategy=STRATEGY_FIXED_SIZE,
+                chunk_size=10,
+                chunk_overlap=0,
+                min_chunk_size=1,
+            ),
+            embedding_provider=provider,
+        )
+
+        doc = KnowledgeDocument(document_id="d1", content="A" * 25)
+        kb.add_document(doc)
+
+        # Embeddings should exist for all chunks
+        assert len(kb.list_embeddings()) >= 2
+        embeddings = kb.list_embeddings()
+        for vec in embeddings:
+            assert len(vec.vector) == 4
+            assert vec.provider == "deterministic"
+
+    def test_embedding_lookup_by_chunk_id(self) -> None:
+        """Look up an embedding by chunk ID."""
+        emb_config = EmbeddingConfig_Impl(
+            provider_name="deterministic",
+            dimensions=3,
+            normalize_embeddings=False,
+        )
+        provider = DeterministicEmbeddingProvider(emb_config)
+
+        kb = KnowledgeBase(
+            chunking_config=ChunkingConfig(
+                strategy=STRATEGY_FIXED_SIZE,
+                chunk_size=10,
+                chunk_overlap=0,
+                min_chunk_size=1,
+            ),
+            embedding_provider=provider,
+        )
+
+        doc = KnowledgeDocument(document_id="d1", content="A" * 30)
+        kb.add_document(doc)
+
+        # Get first chunk's embedding
+        first_chunk = list(kb.list_chunks())[0]
+        vec = kb.get_embedding(first_chunk.chunk_id)
+        assert vec is not None
+        assert len(vec.vector) == 3
+
+        # Missing chunk returns None
+        assert kb.get_embedding("nonexistent") is None
+
+    def test_with_mock_provider(self) -> None:
+        """Mock provider returns expected zero vectors."""
+        emb_config = EmbeddingConfig_Impl(
+            provider_name="mock_test",
+            dimensions=2,
+        )
+        provider = MockEmbeddingProvider(emb_config)
+
+        kb = KnowledgeBase(
+            chunking_config=ChunkingConfig(
+                strategy=STRATEGY_WHOLE_DOCUMENT,
+            ),
+            embedding_provider=provider,
+        )
+
+        doc = KnowledgeDocument(document_id="d1", content="Hello world.")
+        kb.add_document(doc)
+
+        assert len(kb.list_embeddings()) == 1
+        vec = list(kb.list_embeddings())[0]
+        assert vec.vector == (0.0, 0.0)
+        assert vec.dimensions == 2
+
+    def test_deterministic_output(self) -> None:
+        """Same input → same embeddings across separate KB instances."""
+        emb_config = EmbeddingConfig_Impl(
+            provider_name="deterministic",
+            dimensions=4,
+            normalize_embeddings=False,
+        )
+
+        def make_kb() -> KnowledgeBase:
+            return KnowledgeBase(
+                chunking_config=ChunkingConfig(
+                    strategy=STRATEGY_FIXED_SIZE,
+                    chunk_size=20,
+                    chunk_overlap=0,
+                    min_chunk_size=1,
+                ),
+                embedding_provider=DeterministicEmbeddingProvider(emb_config),
+            )
+
+        kb1 = make_kb()
+        kb2 = make_kb()
+
+        text = "This is a deterministic test."
+        doc1 = KnowledgeDocument(document_id="d1", content=text)
+        doc2 = KnowledgeDocument(document_id="d1", content=text)
+
+        kb1.add_document(doc1)
+        kb2.add_document(doc2)
+
+        vecs1 = kb1.list_embeddings()
+        vecs2 = kb2.list_embeddings()
+
+        assert len(vecs1) == len(vecs2)
+        for v1, v2 in zip(vecs1, vecs2):
+            assert v1.vector == v2.vector
+
+    def test_empty_document_no_embeddings(self) -> None:
+        """Empty document produces no chunks, no embeddings."""
+        emb_config = EmbeddingConfig_Impl(
+            provider_name="deterministic",
+            dimensions=4,
+            normalize_embeddings=False,
+        )
+        provider = DeterministicEmbeddingProvider(emb_config)
+
+        kb = KnowledgeBase(
+            chunking_config=ChunkingConfig(strategy=STRATEGY_WHOLE_DOCUMENT),
+            embedding_provider=provider,
+        )
+
+        doc = KnowledgeDocument(document_id="d1", content="")
+        kb.add_document(doc)
+        assert kb.list_chunks() == []
+        assert kb.list_embeddings() == []
+
+    def test_unicode_text(self) -> None:
+        """Unicode text produce embeddings correctly."""
+        emb_config = EmbeddingConfig_Impl(
+            provider_name="deterministic",
+            dimensions=4,
+            normalize_embeddings=False,
+        )
+        provider = DeterministicEmbeddingProvider(emb_config)
+
+        kb = KnowledgeBase(
+            chunking_config=ChunkingConfig(strategy=STRATEGY_WHOLE_DOCUMENT),
+            embedding_provider=provider,
+        )
+
+        doc = KnowledgeDocument(document_id="d1", content="Hello 世界! 🌍✨")
+        kb.add_document(doc)
+        assert len(kb.list_embeddings()) == 1
+        vec = kb.list_embeddings()[0]
+        assert len(vec.vector) == 4
+
+    def test_duplicate_document_still_raises(self) -> None:
+        """Duplicate detection works even with embedding provider."""
+        emb_config = EmbeddingConfig_Impl(
+            provider_name="deterministic",
+            dimensions=4,
+        )
+        provider = DeterministicEmbeddingProvider(emb_config)
+
+        kb = KnowledgeBase(
+            chunking_config=ChunkingConfig(strategy=STRATEGY_WHOLE_DOCUMENT),
+            embedding_provider=provider,
+        )
+
+        kb.add_document(KnowledgeDocument(document_id="d1", content="Text."))
+        with pytest.raises(DuplicateDocumentError):
+            kb.add_document(KnowledgeDocument(document_id="d1", content="More text."))
+
+    def test_remove_removes_embeddings(self) -> None:
+        """Removing a document also removes its embeddings."""
+        emb_config = EmbeddingConfig_Impl(
+            provider_name="deterministic",
+            dimensions=3,
+            normalize_embeddings=False,
+        )
+        provider = DeterministicEmbeddingProvider(emb_config)
+
+        kb = KnowledgeBase(
+            chunking_config=ChunkingConfig(
+                strategy=STRATEGY_FIXED_SIZE,
+                chunk_size=10,
+                chunk_overlap=0,
+                min_chunk_size=1,
+            ),
+            embedding_provider=provider,
+        )
+
+        doc = KnowledgeDocument(document_id="d1", content="A" * 30)
+        kb.add_document(doc)
+        assert len(kb.list_embeddings()) >= 2
+
+        kb.remove("d1")
+        assert len(kb.list_embeddings()) == 0
+
+    def test_clear_removes_embeddings(self) -> None:
+        """Clearing the KB removes all embeddings."""
+        emb_config = EmbeddingConfig_Impl(
+            provider_name="deterministic",
+            dimensions=3,
+            normalize_embeddings=False,
+        )
+        provider = DeterministicEmbeddingProvider(emb_config)
+
+        kb = KnowledgeBase(
+            chunking_config=ChunkingConfig(strategy=STRATEGY_WHOLE_DOCUMENT),
+            embedding_provider=provider,
+        )
+
+        kb.add_document(KnowledgeDocument(document_id="d1", content="Text."))
+        kb.add_document(KnowledgeDocument(document_id="d2", content="More."))
+        assert len(kb.list_embeddings()) == 2
+
+        kb.clear()
+        assert len(kb.list_embeddings()) == 0
+
+    def test_embedding_provider_property(self) -> None:
+        """The embedding_provider property returns the configured provider."""
+        emb_config = EmbeddingConfig_Impl(
+            provider_name="deterministic",
+            dimensions=4,
+        )
+        provider = DeterministicEmbeddingProvider(emb_config)
+        kb = KnowledgeBase(embedding_provider=provider)
+        assert kb.embedding_provider is provider
+
+    def test_embedding_vectors_have_metadata(self) -> None:
+        """Embedding vectors include provider and metadata."""
+        emb_config = EmbeddingConfig_Impl(
+            provider_name="deterministic",
+            dimensions=4,
+            normalize_embeddings=False,
+        )
+        provider = DeterministicEmbeddingProvider(emb_config)
+
+        kb = KnowledgeBase(
+            chunking_config=ChunkingConfig(strategy=STRATEGY_WHOLE_DOCUMENT),
+            embedding_provider=provider,
+        )
+
+        kb.add_document(KnowledgeDocument(document_id="d1", content="Test text."))
+        vec = kb.list_embeddings()[0]
+        assert vec.provider == "deterministic"
+        assert vec.dimensions == 4
+        assert "text_length" in vec.metadata
+
+    def test_mock_provider_with_custom_factory(self) -> None:
+        """Mock provider with custom vector factory produces custom embeddings."""
+        def factory(text: str) -> tuple[float, ...]:
+            return (1.0, 2.0, 3.0)
+
+        emb_config = EmbeddingConfig_Impl(
+            provider_name="mock_custom",
+            dimensions=3,
+        )
+        provider = MockEmbeddingProvider(emb_config, vector_factory=factory)
+
+        kb = KnowledgeBase(
+            chunking_config=ChunkingConfig(strategy=STRATEGY_WHOLE_DOCUMENT),
+            embedding_provider=provider,
+        )
+
+        kb.add_document(KnowledgeDocument(document_id="d1", content="Test."))
+        vec = kb.list_embeddings()[0]
+        assert vec.vector == (1.0, 2.0, 3.0)
+
+    def test_batch_embedding_generation(self) -> None:
+        """Multiple chunks produce multiple embeddings, one per chunk."""
+        emb_config = EmbeddingConfig_Impl(
+            provider_name="deterministic",
+            dimensions=2,
+            normalize_embeddings=False,
+        )
+        provider = DeterministicEmbeddingProvider(emb_config)
+
+        kb = KnowledgeBase(
+            chunking_config=ChunkingConfig(
+                strategy=STRATEGY_FIXED_SIZE,
+                chunk_size=10,
+                chunk_overlap=0,
+                min_chunk_size=1,
+            ),
+            embedding_provider=provider,
+        )
+
+        doc = KnowledgeDocument(document_id="d1", content="A" * 30)
+        kb.add_document(doc)
+
+        chunks = kb.list_chunks()
+        embeddings = kb.list_embeddings()
+        assert len(embeddings) == len(chunks) == 3
+
+    def test_embeddings_survive_register(self) -> None:
+        """register() with pre-built chunks does not interact with embeddings."""
+        emb_config = EmbeddingConfig_Impl(
+            provider_name="deterministic",
+            dimensions=2,
+        )
+        provider = DeterministicEmbeddingProvider(emb_config)
+
+        kb = KnowledgeBase(
+            embedding_provider=provider,
+        )
+
+        # Plain register — no automatic embedding generation
+        doc = KnowledgeDocument(
+            document_id="d1",
+            chunks=(KnowledgeChunk(chunk_id="c1", document_id="d1", content="x"),),
+        )
+        kb.register(doc)
+        assert len(kb.list_embeddings()) == 0
+        assert kb.get_embedding("c1") is None

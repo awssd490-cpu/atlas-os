@@ -10,7 +10,7 @@ knowledge.  It supports thousands of documents with efficient lookups.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.rag.chunking import ChunkingConfig, ChunkingEngine
 from app.rag.errors import (
@@ -18,6 +18,10 @@ from app.rag.errors import (
     DuplicateDocumentError,
 )
 from app.rag.models import KnowledgeChunk, KnowledgeDocument
+
+if TYPE_CHECKING:
+    from app.rag.embeddings.base import EmbeddingProvider
+    from app.rag.embeddings.models import EmbeddingVector
 
 
 class KnowledgeBase:
@@ -31,6 +35,9 @@ class KnowledgeBase:
     full control over chunk boundaries can still use ``register()`` with
     pre-built chunks.
 
+    If an ``EmbeddingProvider`` is configured, embeddings are generated
+    automatically for every chunk during ``add_document()``.
+
     Usage::
 
         kb = KnowledgeBase()
@@ -43,10 +50,27 @@ class KnowledgeBase:
     def __init__(
         self,
         chunking_config: ChunkingConfig | None = None,
+        embedding_provider: EmbeddingProvider | None = None,
     ) -> None:
         self._documents: dict[str, KnowledgeDocument] = {}
         self._chunks: dict[str, KnowledgeChunk] = {}
+        self._embeddings: dict[str, EmbeddingVector] = {}
         self._chunking_engine = ChunkingEngine(config=chunking_config)
+        self._embedding_provider = embedding_provider
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def chunking_config(self) -> ChunkingConfig:
+        """Return the chunking configuration in use."""
+        return self._chunking_engine.config
+
+    @property
+    def embedding_provider(self) -> EmbeddingProvider | None:
+        """Return the embedding provider, or ``None`` if not configured."""
+        return self._embedding_provider
 
     # ------------------------------------------------------------------
     # Registration
@@ -86,6 +110,9 @@ class KnowledgeBase:
         configured (or passed) strategy.  The resulting chunks are
         stored alongside the document.
 
+        If an ``EmbeddingProvider`` is configured on this knowledge base,
+        embeddings are generated for every chunk automatically.
+
         Args:
             document: The document to add.
             config: Optional per-call chunking configuration.  Falls
@@ -100,6 +127,7 @@ class KnowledgeBase:
         """
         self._raise_if_duplicate(document)
 
+        # Step 1: chunk
         result = self._chunking_engine.chunk(
             document.content,
             config=config,
@@ -114,6 +142,11 @@ class KnowledgeBase:
             metadata=document.metadata,
         )
 
+        # Step 2: embed (if a provider is configured)
+        if self._embedding_provider is not None and result.chunks:
+            self._generate_embeddings(result.chunks)
+
+        # Step 3: store
         self._store_document(chunked_doc)
         return chunked_doc
 
@@ -130,9 +163,10 @@ class KnowledgeBase:
         if doc is None:
             return False
 
-        # Remove associated chunks
+        # Remove associated chunks and their embeddings
         for chunk in doc.chunks:
             self._chunks.pop(chunk.chunk_id, None)
+            self._embeddings.pop(chunk.chunk_id, None)
 
         return True
 
@@ -166,6 +200,17 @@ class KnowledgeBase:
         """
         return self._chunks.get(chunk_id)
 
+    def get_embedding(self, chunk_id: str) -> EmbeddingVector | None:
+        """Look up an embedding vector by chunk ID.
+
+        Args:
+            chunk_id: The chunk identifier.
+
+        Returns:
+            The ``EmbeddingVector`` or ``None`` if no embedding exists.
+        """
+        return self._embeddings.get(chunk_id)
+
     # ------------------------------------------------------------------
     # Enumeration
     # ------------------------------------------------------------------
@@ -178,14 +223,19 @@ class KnowledgeBase:
         """Return all registered chunks across all documents."""
         return list(self._chunks.values())
 
+    def list_embeddings(self) -> list[EmbeddingVector]:
+        """Return all stored embedding vectors."""
+        return list(self._embeddings.values())
+
     def count(self) -> int:
         """Return the number of registered documents."""
         return len(self._documents)
 
     def clear(self) -> None:
-        """Remove all documents and chunks."""
+        """Remove all documents, chunks, and embeddings."""
         self._documents.clear()
         self._chunks.clear()
+        self._embeddings.clear()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -203,11 +253,28 @@ class KnowledgeBase:
         for chunk in document.chunks:
             self._chunks[chunk.chunk_id] = chunk
 
-    # ------------------------------------------------------------------
-    # Properties
-    # ------------------------------------------------------------------
+    def _generate_embeddings(self, chunks: tuple[KnowledgeChunk, ...]) -> None:
+        """Generate embeddings for a tuple of chunks using the configured provider.
 
-    @property
-    def chunking_config(self) -> ChunkingConfig:
-        """Return the chunking configuration in use."""
-        return self._chunking_engine.config
+        Chunks are embedded in batch for efficiency.  The resulting
+        vectors are stored keyed by chunk ID.
+        """
+        if self._embedding_provider is None or not chunks:
+            return
+
+        import asyncio
+        import time
+
+        texts = [chunk.content for chunk in chunks]
+        try:
+            # Use asyncio.run() since add_document is synchronous
+            result = asyncio.run(self._embedding_provider.embed_batch(texts))
+        except Exception as exc:
+            from app.rag.embeddings.errors import EmbeddingProviderError
+            raise EmbeddingProviderError(
+                f"Failed to generate embeddings: {exc}",
+                details={"chunk_count": len(chunks)},
+            ) from exc
+
+        for chunk, vec in zip(chunks, result.embeddings):
+            self._embeddings[chunk.chunk_id] = vec
