@@ -14,6 +14,7 @@ from app.rag.evaluation import (
     EvaluationResult,
     EvaluationRunner,
     InvalidEvaluationConfiguration,
+    RetrievalMetrics,
     clear_runners,
     get,
     list_runners,
@@ -26,6 +27,7 @@ from app.rag.evaluation.errors import EvaluationError as EvaluationError_Impl
 from app.rag.evaluation.errors import EvaluationNotFound as EvaluationNotFound_Impl
 from app.rag.evaluation.models import BenchmarkResult as BenchmarkResult_Impl
 from app.rag.evaluation.models import EvaluationResult as EvaluationResult_Impl
+from app.rag.evaluation.retrieval_metrics import RetrievalMetrics as RetrievalMetrics_Impl
 from app.rag.errors import KnowledgeError
 
 
@@ -64,6 +66,9 @@ class TestImports:
         assert callable(get)
         assert callable(list_runners)
         assert callable(clear_runners)
+
+    def test_retrieval_metrics_imported(self) -> None:
+        assert RetrievalMetrics is RetrievalMetrics_Impl
 
 
 # ======================================================================
@@ -362,3 +367,357 @@ class TestEvaluationErrors:
 
     def test_knowledge_error_is_base(self) -> None:
         assert issubclass(EvaluationError, KnowledgeError)
+
+
+# ======================================================================
+# RetrievalMetrics — precision_at_k
+# ======================================================================
+
+
+class TestPrecisionAtK:
+    """precision_at_k tests."""
+
+    @pytest.fixture
+    def metrics(self) -> RetrievalMetrics:
+        return RetrievalMetrics()
+
+    def test_all_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.precision_at_k(["a", "b", "c"], {"a", "b", "c"}, k=3)
+        assert result == 1.0
+
+    def test_partial_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.precision_at_k(["a", "b", "c", "d"], {"a", "c"}, k=4)
+        assert result == 0.5
+
+    def test_none_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.precision_at_k(["a", "b"], {"c", "d"}, k=2)
+        assert result == 0.0
+
+    def test_k_smaller_than_list(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.precision_at_k(["a", "b", "c", "d"], {"a", "d"}, k=2)
+        assert result == 0.5
+
+    def test_k_larger_than_list(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.precision_at_k(["a", "b"], {"a", "c"}, k=10)
+        assert result == 0.1
+
+    def test_k_is_zero(self, metrics: RetrievalMetrics) -> None:
+        assert metrics.precision_at_k(["a", "b"], {"a"}, k=0) == 0.0
+
+    def test_k_is_negative(self, metrics: RetrievalMetrics) -> None:
+        assert metrics.precision_at_k(["a", "b"], {"a"}, k=-1) == 0.0
+
+    def test_empty_retrieved(self, metrics: RetrievalMetrics) -> None:
+        assert metrics.precision_at_k([], {"a"}, k=5) == 0.0
+
+    def test_empty_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.precision_at_k(["a", "b"], set(), k=2)
+        assert result == 0.0
+
+    def test_unicode_ids(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.precision_at_k(["東京", "巴黎", "倫敦"], {"東京", "倫敦"}, k=3)
+        assert result == pytest.approx(2.0 / 3.0)
+
+    def test_deterministic(self, metrics: RetrievalMetrics) -> None:
+        a = metrics.precision_at_k(["x", "y"], {"x"}, k=2)
+        b = metrics.precision_at_k(["x", "y"], {"x"}, k=2)
+        assert a == b
+
+
+# ======================================================================
+# RetrievalMetrics — recall_at_k
+# ======================================================================
+
+
+class TestRecallAtK:
+    """recall_at_k tests."""
+
+    @pytest.fixture
+    def metrics(self) -> RetrievalMetrics:
+        return RetrievalMetrics()
+
+    def test_all_relevant_found(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.recall_at_k(["a", "b", "c"], {"a", "b"}, k=3)
+        assert result == 1.0
+
+    def test_partial_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.recall_at_k(["a", "b"], {"a", "c", "d"}, k=2)
+        assert result == 1.0 / 3.0
+
+    def test_none_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.recall_at_k(["a", "b"], {"c"}, k=2)
+        assert result == 0.0
+
+    def test_k_smaller_than_list(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.recall_at_k(["a", "b", "c"], {"a", "c"}, k=1)
+        assert result == 0.5
+
+    def test_k_larger_than_list(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.recall_at_k(["a", "b"], {"a", "c"}, k=10)
+        assert result == 0.5
+
+    def test_k_is_zero(self, metrics: RetrievalMetrics) -> None:
+        assert metrics.recall_at_k(["a", "b"], {"a"}, k=0) == 0.0
+
+    def test_k_is_negative(self, metrics: RetrievalMetrics) -> None:
+        assert metrics.recall_at_k(["a", "b"], {"a"}, k=-1) == 0.0
+
+    def test_empty_retrieved(self, metrics: RetrievalMetrics) -> None:
+        assert metrics.recall_at_k([], {"a"}, k=5) == 0.0
+
+    def test_empty_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.recall_at_k(["a", "b"], set(), k=2)
+        assert result == 1.0
+
+    def test_unicode_ids(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.recall_at_k(["東京", "巴黎"], {"東京", "倫敦"}, k=2)
+        assert result == 0.5
+
+    def test_deterministic(self, metrics: RetrievalMetrics) -> None:
+        a = metrics.recall_at_k(["x", "y"], {"x"}, k=2)
+        b = metrics.recall_at_k(["x", "y"], {"x"}, k=2)
+        assert a == b
+
+
+# ======================================================================
+# RetrievalMetrics — f1_at_k
+# ======================================================================
+
+
+class TestF1AtK:
+    """F1 at k tests."""
+
+    @pytest.fixture
+    def metrics(self) -> RetrievalMetrics:
+        return RetrievalMetrics()
+
+    def test_perfect_precision_recall(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.f1_at_k(["a", "b"], {"a", "b"}, k=2)
+        assert result == 1.0
+
+    def test_harmonic_mean(self, metrics: RetrievalMetrics) -> None:
+        # P=0.5, R=1.0 → F1 = 2*0.5*1.0 / (0.5+1.0) = 1.0/1.5 = 0.667
+        result = metrics.f1_at_k(["a", "b", "c", "d"], {"a", "b"}, k=4)
+        assert result == pytest.approx(2.0 / 3.0)
+
+    def test_no_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.f1_at_k(["a", "b"], {"c"}, k=2)
+        assert result == 0.0
+
+    def test_empty_retrieved(self, metrics: RetrievalMetrics) -> None:
+        assert metrics.f1_at_k([], {"a"}, k=5) == 0.0
+
+    def test_empty_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.f1_at_k(["a"], set(), k=1)
+        assert result == 0.0
+
+    def test_unbalanced(self, metrics: RetrievalMetrics) -> None:
+        # P=0.5 (1/2), R=0.5 (1/2) → F1 = 0.5
+        result = metrics.f1_at_k(["a", "b"], {"a", "c"}, k=2)
+        assert result == 0.5
+
+    def test_k_is_zero(self, metrics: RetrievalMetrics) -> None:
+        assert metrics.f1_at_k(["a"], {"a"}, k=0) == 0.0
+
+    def test_deterministic(self, metrics: RetrievalMetrics) -> None:
+        a = metrics.f1_at_k(["x", "y"], {"x"}, k=2)
+        b = metrics.f1_at_k(["x", "y"], {"x"}, k=2)
+        assert a == b
+
+
+# ======================================================================
+# RetrievalMetrics — mean_reciprocal_rank
+# ======================================================================
+
+
+class TestMeanReciprocalRank:
+    """MRR tests."""
+
+    @pytest.fixture
+    def metrics(self) -> RetrievalMetrics:
+        return RetrievalMetrics()
+
+    def test_first_is_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.mean_reciprocal_rank(["a", "b", "c"], {"a"})
+        assert result == 1.0
+
+    def test_second_is_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.mean_reciprocal_rank(["a", "b", "c"], {"b"})
+        assert result == 0.5
+
+    def test_third_is_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.mean_reciprocal_rank(["a", "b", "c"], {"c"})
+        assert result == 1.0 / 3.0
+
+    def test_none_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.mean_reciprocal_rank(["a", "b"], {"c"})
+        assert result == 0.0
+
+    def test_first_of_multiple(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.mean_reciprocal_rank(["a", "b", "c"], {"b", "c"})
+        assert result == 0.5
+
+    def test_empty_retrieved(self, metrics: RetrievalMetrics) -> None:
+        assert metrics.mean_reciprocal_rank([], {"a"}) == 0.0
+
+    def test_empty_relevant(self, metrics: RetrievalMetrics) -> None:
+        assert metrics.mean_reciprocal_rank(["a", "b"], set()) == 0.0
+
+    def test_relevant_at_first_rank(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.mean_reciprocal_rank(["a", "b", "c"], {"a", "b"})
+        assert result == 1.0
+
+    def test_deterministic(self, metrics: RetrievalMetrics) -> None:
+        a = metrics.mean_reciprocal_rank(["x", "y", "z"], {"y"})
+        b = metrics.mean_reciprocal_rank(["x", "y", "z"], {"y"})
+        assert a == b
+
+
+# ======================================================================
+# RetrievalMetrics — average_precision
+# ======================================================================
+
+
+class TestAveragePrecision:
+    """Average precision (AP) tests."""
+
+    @pytest.fixture
+    def metrics(self) -> RetrievalMetrics:
+        return RetrievalMetrics()
+
+    def test_all_relevant_at_top(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.average_precision(["a", "b", "c"], {"a", "b", "c"})
+        assert result == 1.0
+
+    def test_standard_case(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.average_precision(
+            ["a", "b", "c", "d", "e"],
+            {"a", "c", "e"},
+        )
+        expected = (1.0 + 2.0 / 3.0 + 3.0 / 5.0) / 3.0
+        assert result == pytest.approx(expected)
+
+    def test_none_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.average_precision(["a", "b"], {"c"})
+        assert result == 0.0
+
+    def test_empty_retrieved(self, metrics: RetrievalMetrics) -> None:
+        assert metrics.average_precision([], {"a"}) == 0.0
+
+    def test_empty_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.average_precision(["a", "b"], set())
+        assert result == 1.0
+
+    def test_single_relevant_last(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.average_precision(
+            ["a", "b", "c", "d", "e"], {"e"},
+        )
+        assert result == 0.2
+
+    def test_deterministic(self, metrics: RetrievalMetrics) -> None:
+        a = metrics.average_precision(["x", "y", "z"], {"x", "z"})
+        b = metrics.average_precision(["x", "y", "z"], {"x", "z"})
+        assert a == b
+
+
+# ======================================================================
+# RetrievalMetrics — normalized_dcg
+# ======================================================================
+
+
+class TestNormalizedDCG:
+    """nDCG@k tests."""
+
+    @pytest.fixture
+    def metrics(self) -> RetrievalMetrics:
+        return RetrievalMetrics()
+
+    def test_perfect_ranking(self, metrics: RetrievalMetrics) -> None:
+        import math
+        result = metrics.normalized_dcg(["a", "b", "c"], {"a", "b", "c"}, k=3)
+        assert result == pytest.approx(1.0)
+
+    def test_partial_ranking(self, metrics: RetrievalMetrics) -> None:
+        import math
+        result = metrics.normalized_dcg(
+            ["a", "b", "c", "d"], {"b", "d"}, k=4,
+        )
+        dcg = 1.0 / math.log2(3.0) + 1.0 / math.log2(5.0)
+        idcg = 1.0 / math.log2(2.0) + 1.0 / math.log2(3.0)
+        assert result == pytest.approx(dcg / idcg)
+
+    def test_no_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.normalized_dcg(["a", "b", "c"], {"d"}, k=3)
+        assert result == 0.0
+
+    def test_k_smaller_than_results(self, metrics: RetrievalMetrics) -> None:
+        import math
+        result = metrics.normalized_dcg(
+            ["a", "b", "c", "d"], {"a", "d"}, k=2,
+        )
+        assert result == pytest.approx(1.0)
+
+    def test_k_is_zero(self, metrics: RetrievalMetrics) -> None:
+        assert metrics.normalized_dcg(["a", "b"], {"a"}, k=0) == 0.0
+
+    def test_k_is_negative(self, metrics: RetrievalMetrics) -> None:
+        assert metrics.normalized_dcg(["a", "b"], {"a"}, k=-1) == 0.0
+
+    def test_empty_retrieved(self, metrics: RetrievalMetrics) -> None:
+        assert metrics.normalized_dcg([], {"a"}, k=5) == 0.0
+
+    def test_empty_relevant(self, metrics: RetrievalMetrics) -> None:
+        result = metrics.normalized_dcg(["a", "b"], set(), k=2)
+        assert result == 1.0
+
+    def test_unicode_ids(self, metrics: RetrievalMetrics) -> None:
+        import math
+        result = metrics.normalized_dcg(["東京", "巴黎"], {"東京"}, k=2)
+        dcg = 1.0 / math.log2(2.0)
+        idcg = 1.0 / math.log2(2.0)
+        assert result == pytest.approx(dcg / idcg)
+
+    def test_deterministic(self, metrics: RetrievalMetrics) -> None:
+        a = metrics.normalized_dcg(["x", "y", "z"], {"x"}, k=3)
+        b = metrics.normalized_dcg(["x", "y", "z"], {"x"}, k=3)
+        assert a == b
+
+
+# ======================================================================
+# RetrievalMetrics — edge cases
+# ======================================================================
+
+
+class TestRetrievalMetricsEdgeCases:
+    """Edge cases and cross-metric consistency."""
+
+    @pytest.fixture
+    def metrics(self) -> RetrievalMetrics:
+        return RetrievalMetrics()
+
+    def test_precision_recall_consistency(self, metrics: RetrievalMetrics) -> None:
+        """All metric values must be in [0.0, 1.0]."""
+        retrieved = ["a", "b", "c", "d", "e"]
+        relevant = {"a", "c", "e"}
+        for k in [1, 3, 5]:
+            p = metrics.precision_at_k(retrieved, relevant, k)
+            r = metrics.recall_at_k(retrieved, relevant, k)
+            f = metrics.f1_at_k(retrieved, relevant, k)
+            ap = metrics.average_precision(retrieved, relevant)
+            ndcg = metrics.normalized_dcg(retrieved, relevant, k)
+            for val, name in [(p, "P"), (r, "R"), (f, "F1"), (ap, "AP"), (ndcg, "nDCG")]:
+                assert 0.0 <= val <= 1.0, f"{name}={val} outside [0, 1] at k={k}"
+
+    def test_mrr_range(self, metrics: RetrievalMetrics) -> None:
+        val = metrics.mean_reciprocal_rank(["a", "b"], {"c"})
+        assert 0.0 <= val <= 1.0
+
+    def test_duplicates_handled(self, metrics: RetrievalMetrics) -> None:
+        """Duplicate IDs in retrieved list are counted as-is."""
+        p = metrics.precision_at_k(["a", "a", "b"], {"a"}, k=3)
+        assert p == pytest.approx(2.0 / 3.0)
+
+    def test_f1_with_one_empty(self, metrics: RetrievalMetrics) -> None:
+        """F1 where P=0, R=1 (empty relevant) should be 0."""
+        f = metrics.f1_at_k(["a"], set(), k=1)
+        assert f == 0.0
