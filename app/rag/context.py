@@ -181,7 +181,7 @@ class KnowledgeContextBuilder:
         # Build content lookup from the chunk list
         content_map = {c.chunk_id: c.content for c in chunks}
         if hasattr(reranker, 'content_provider') and reranker.content_provider is None:  # type: ignore
-            reranker._content_provider = content_map.get  # type: ignore
+            reranker.content_provider = content_map.get  # type: ignore
 
         # Collect (chunk_id, score) pairs
         results: list[tuple[str, float]] = [

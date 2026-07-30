@@ -56,6 +56,15 @@ class DefaultReranker(Reranker):
     def content_provider(self) -> Callable[[str], str | None] | None:
         return self._content_provider
 
+    @content_provider.setter
+    def content_provider(self, provider: Callable[[str], str | None] | None) -> None:
+        """Set the content provider after construction.
+
+        This allows the ContextBuilder to inject a content lookup
+        function before calling ``rerank()``.
+        """
+        self._content_provider = provider
+
     # ------------------------------------------------------------------
     # Reranking API
     # ------------------------------------------------------------------
