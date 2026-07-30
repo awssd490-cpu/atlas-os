@@ -10,6 +10,7 @@ into a coherent end-to-end flow.
 from __future__ import annotations
 
 from app.rag.pipeline.base import KnowledgePipeline
+from app.rag.pipeline.builder import PipelineBuilder
 from app.rag.pipeline.config import PipelineConfig
 from app.rag.pipeline.default import DefaultKnowledgePipeline
 from app.rag.pipeline.errors import (
@@ -30,6 +31,7 @@ __all__ = [
     "DefaultKnowledgePipeline",
     "InvalidPipelineConfiguration",
     "KnowledgePipeline",
+    "PipelineBuilder",
     "PipelineConfig",
     "PipelineError",
     "PipelineNotFound",

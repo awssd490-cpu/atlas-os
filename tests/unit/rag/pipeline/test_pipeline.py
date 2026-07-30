@@ -10,6 +10,7 @@ from app.rag.pipeline import (
     DefaultKnowledgePipeline,
     InvalidPipelineConfiguration,
     KnowledgePipeline,
+    PipelineBuilder,
     PipelineConfig,
     PipelineError,
     PipelineNotFound,
@@ -22,6 +23,7 @@ from app.rag.pipeline import (
     unregister,
 )
 from app.rag.pipeline.base import KnowledgePipeline as KnowledgePipeline_Impl
+from app.rag.pipeline.builder import PipelineBuilder as PipelineBuilder_Impl
 from app.rag.pipeline.config import PipelineConfig as PipelineConfig_Impl
 from app.rag.pipeline.errors import PipelineError as PipelineError_Impl
 from app.rag.pipeline.errors import PipelineNotFound as PipelineNotFound_Impl
@@ -67,6 +69,16 @@ class TestImports:
         assert callable(register)
         assert callable(unregister)
         assert callable(get)
+        assert callable(list_pipelines)
+        assert callable(clear_pipelines)
+
+    def test_pipeline_builder_imported(self) -> None:
+        assert PipelineBuilder is PipelineBuilder_Impl
+        assert callable(PipelineBuilder)
+
+    def test_builder_is_not_none(self) -> None:
+        builder = PipelineBuilder()
+        assert builder is not None
         assert callable(list_pipelines)
         assert callable(clear_pipelines)
 
@@ -1244,3 +1256,328 @@ class TestDefaultPipelineSearchUnifiedMetadata:
         assert isinstance(meta["elapsed_time"], float)
         assert meta["elapsed_time"] >= 0
         assert meta["query"] == "capital"
+
+
+# ======================================================================
+# PipelineBuilder
+# ======================================================================
+
+
+class TestPipelineBuilderConstruction:
+    """Builder construction and chaining."""
+
+    def test_empty_builder(self) -> None:
+        builder = PipelineBuilder()
+        assert builder is not None
+
+    def test_chaining(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+
+        b = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+            .knowledge_base(KnowledgeBase())
+        )
+        assert isinstance(b, PipelineBuilder)
+
+    def test_build_returns_pipeline(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+
+        pipeline = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+            .knowledge_base(KnowledgeBase())
+            .build()
+        )
+        assert isinstance(pipeline, DefaultKnowledgePipeline)
+
+    def test_full_chain(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.embeddings import EmbeddingConfig, DeterministicEmbeddingProvider
+        from app.rag.vectorstore import MemoryVectorStore
+
+        emb_cfg = EmbeddingConfig(provider_name="det", dimensions=4)
+        provider = DeterministicEmbeddingProvider(emb_cfg)
+
+        pipeline = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+            .knowledge_base(KnowledgeBase())
+            .embedding_provider(provider)
+            .vector_store(MemoryVectorStore())
+            .config(PipelineConfig(auto_embed=True))
+            .build()
+        )
+        assert isinstance(pipeline, DefaultKnowledgePipeline)
+        assert pipeline.embedding_provider is provider
+        assert pipeline.vector_store is not None
+        assert pipeline.config.auto_embed is True
+
+
+class TestPipelineBuilderValidation:
+    """Validation of required components."""
+
+    def test_missing_loader(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+
+        builder = (
+            PipelineBuilder()
+            .chunker(ChunkingEngine())
+            .knowledge_base(KnowledgeBase())
+        )
+        with pytest.raises(InvalidPipelineConfiguration) as exc:
+            builder.build()
+        assert "loader" in str(exc.value)
+
+    def test_missing_chunker(self) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+
+        builder = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .knowledge_base(KnowledgeBase())
+        )
+        with pytest.raises(InvalidPipelineConfiguration) as exc:
+            builder.build()
+        assert "chunker" in str(exc.value)
+
+    def test_missing_knowledge_base(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+
+        builder = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+        )
+        with pytest.raises(InvalidPipelineConfiguration) as exc:
+            builder.build()
+        assert "knowledge_base" in str(exc.value)
+
+    def test_missing_all(self) -> None:
+        builder = PipelineBuilder()
+        with pytest.raises(InvalidPipelineConfiguration) as exc:
+            builder.build()
+        details = exc.value.details
+        assert "loader" in details.get("missing", [])
+        assert "chunker" in details.get("missing", [])
+        assert "knowledge_base" in details.get("missing", [])
+
+    def test_details_on_missing(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+
+        builder = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+            .knowledge_base(KnowledgeBase())
+        )
+        # No missing components — build succeeds
+        pipeline = builder.build()
+        assert isinstance(pipeline, DefaultKnowledgePipeline)
+
+
+class TestPipelineBuilderOptionalDeps:
+    """Optional dependencies (embedding, vector store, reranker, config)."""
+
+    def test_no_optional_deps(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+
+        pipeline = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+            .knowledge_base(KnowledgeBase())
+            .build()
+        )
+        assert pipeline.embedding_provider is None
+        assert pipeline.vector_store is None
+        assert pipeline.config.batch_size == 32  # default config
+
+    def test_with_embedding_provider(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.embeddings import EmbeddingConfig, DeterministicEmbeddingProvider
+
+        provider = DeterministicEmbeddingProvider(
+            EmbeddingConfig(provider_name="det", dimensions=4)
+        )
+        pipeline = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+            .knowledge_base(KnowledgeBase())
+            .embedding_provider(provider)
+            .build()
+        )
+        assert pipeline.embedding_provider is provider
+
+    def test_with_vector_store(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.vectorstore import MemoryVectorStore
+
+        vs = MemoryVectorStore()
+        pipeline = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+            .knowledge_base(KnowledgeBase())
+            .vector_store(vs)
+            .build()
+        )
+        assert pipeline.vector_store is vs
+
+    def test_with_reranker(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.rerank import DefaultReranker
+
+        reranker = DefaultReranker()
+        pipeline = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+            .knowledge_base(KnowledgeBase())
+            .reranker(reranker)
+            .build()
+        )
+        assert pipeline.knowledge_base.reranker is reranker
+
+    def test_with_config(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+
+        cfg = PipelineConfig(auto_embed=False, batch_size=8)
+        pipeline = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+            .knowledge_base(KnowledgeBase())
+            .config(cfg)
+            .build()
+        )
+        assert pipeline.config.batch_size == 8
+        assert pipeline.config.auto_embed is False
+
+    def test_set_embedding_to_none(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.embeddings import EmbeddingConfig, DeterministicEmbeddingProvider
+
+        provider = DeterministicEmbeddingProvider(
+            EmbeddingConfig(provider_name="det", dimensions=4)
+        )
+        pipeline = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+            .knowledge_base(KnowledgeBase())
+            .embedding_provider(provider)
+            .embedding_provider(None)
+            .build()
+        )
+        assert pipeline.embedding_provider is None
+
+
+class TestPipelineBuilderReplacement:
+    """Replacing components before build."""
+
+    def test_replace_loader(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument
+
+        docs_a = [KnowledgeDocument(document_id="a", title="A", content="Hello")]
+        docs_b = [KnowledgeDocument(document_id="b", title="B", content="World")]
+
+        builder = (
+            PipelineBuilder()
+            .loader(_make_loader(docs_a))
+            .chunker(ChunkingEngine())
+            .knowledge_base(KnowledgeBase())
+        )
+
+        # Replace loader
+        builder.loader(_make_loader(docs_b))
+        pipeline = builder.build()
+        assert pipeline.loader("")[0].document_id == "b"
+
+    def test_replace_config(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+
+        cfg_a = PipelineConfig(batch_size=16)
+        cfg_b = PipelineConfig(batch_size=64)
+
+        pipeline = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+            .knowledge_base(KnowledgeBase())
+            .config(cfg_a)
+            .config(cfg_b)
+            .build()
+        )
+        assert pipeline.config.batch_size == 64
+
+
+class TestPipelineBuilderMultipleBuilds:
+    """Multiple builds produce fresh, independent pipelines."""
+
+    def test_multiple_builds_produce_fresh_instances(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+
+        builder = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+            .knowledge_base(KnowledgeBase())
+        )
+        p1 = builder.build()
+        p2 = builder.build()
+
+        assert p1 is not p2
+        assert isinstance(p1, DefaultKnowledgePipeline)
+        assert isinstance(p2, DefaultKnowledgePipeline)
+
+    def test_multiple_builds_independent_state(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+
+        # Build two pipelines with separate knowledge bases
+        kb1 = KnowledgeBase()
+        kb2 = KnowledgeBase()
+
+        p1 = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+            .knowledge_base(kb1)
+            .build()
+        )
+        p2 = (
+            PipelineBuilder()
+            .loader(_make_loader([]))
+            .chunker(ChunkingEngine())
+            .knowledge_base(kb2)
+            .build()
+        )
+
+        # When each pipeline has its own KnowledgeBase, registering a
+        # document in one should not affect the other.
+        from app.rag.models import KnowledgeDocument
+        doc = KnowledgeDocument(document_id="shared", title="Shared", content="Test data")
+        p1.knowledge_base.register(doc)
+
+        assert p1.knowledge_base.count() == 1
+        assert p2.knowledge_base.count() == 0
