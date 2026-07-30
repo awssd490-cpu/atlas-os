@@ -19,6 +19,14 @@ from app.rag.chunking.errors import (
     UnsupportedStrategyError,
 )
 from app.rag.chunking.metadata import ChunkMetadata
+from app.rag.chunking.strategies import (
+    STRATEGY_FIXED_SIZE,
+    STRATEGY_PARAGRAPH,
+    STRATEGY_RECURSIVE,
+    STRATEGY_SENTENCE,
+    STRATEGY_SLIDING_WINDOW,
+    STRATEGY_WHOLE_DOCUMENT,
+)
 
 __all__ = [
     "ChunkingConfig",
@@ -30,5 +38,11 @@ __all__ = [
     "ChunkingStrategy",
     "ChunkMetadata",
     "ChunkResult",
+    "STRATEGY_FIXED_SIZE",
+    "STRATEGY_PARAGRAPH",
+    "STRATEGY_RECURSIVE",
+    "STRATEGY_SENTENCE",
+    "STRATEGY_SLIDING_WINDOW",
+    "STRATEGY_WHOLE_DOCUMENT",
     "UnsupportedStrategyError",
 ]

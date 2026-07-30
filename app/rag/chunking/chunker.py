@@ -1,26 +1,26 @@
 """ChunkingEngine — the public entry point for document chunking.
 
 The engine owns the chunking lifecycle:
-  1. Validate config.
+  1. Validate configuration.
   2. Resolve the strategy implementation.
   3. Execute the strategy.
-  4. Wrap the result.
+  4. Post-process chunks (assign document IDs and chunk IDs).
+  5. Return ``ChunkResult``.
 
 It does NOT store, register, or persist chunks — it only produces them.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 from app.rag.chunking.base import ChunkResult
 from app.rag.chunking.config import ChunkingConfig
 from app.rag.chunking.errors import ChunkingEngineError, UnsupportedStrategyError
+from app.rag.chunking.metadata import ChunkMetadata
 from app.rag.chunking.strategies import (
-    STRATEGY_FIXED_SIZE,
-    STRATEGY_RECURSIVE,
-    STRATEGY_SENTENCE,
-    _stub_chunk,
+    _register_builtins,
     get_strategy,
     list_strategies,
     register_strategy,
@@ -28,8 +28,19 @@ from app.rag.chunking.strategies import (
 from app.rag.models import KnowledgeChunk
 
 
+def _make_chunk_id(strategy: str, document_id: str, index: int) -> str:
+    """Generate a deterministic chunk ID.
+
+    The ID encodes the strategy name, optional document ID, and chunk
+    position so it is reproducible given the same inputs.
+    """
+    if document_id:
+        return f"{strategy}:{document_id}:{index}"
+    return f"{strategy}:{index}"
+
+
 class ChunkingEngine:
-    """Skeleton chunking engine.
+    """Entry point for chunking documents.
 
     Usage::
 
@@ -95,7 +106,7 @@ class ChunkingEngine:
             ) from exc
 
         try:
-            strategy = get_strategy(resolved_config.strategy)
+            strategy_fn = get_strategy(resolved_config.strategy)
         except UnsupportedStrategyError:
             available = list_strategies()
             raise ChunkingEngineError(
@@ -105,36 +116,52 @@ class ChunkingEngine:
             ) from None
 
         try:
-            result = strategy(text, resolved_config)
+            result = strategy_fn(text, resolved_config)
         except Exception as exc:
             raise ChunkingEngineError(
                 f"Strategy {resolved_config.strategy!r} failed",
                 details={"strategy": resolved_config.strategy},
             ) from exc
 
-        # Assign document_id to every chunk if provided
-        if document_id:
-            chunks = tuple(
-                chunk
-                if chunk.document_id
-                else KnowledgeChunk(
-                    chunk_id=chunk.chunk_id,
-                    document_id=document_id,
-                    content=chunk.content,
-                    index=chunk.index,
-                    metadata=chunk.metadata,
-                )
-                for chunk in result.chunks
+        # Post-process: assign deterministic chunk IDs and document IDs,
+        # and ensure metadata is consistent.
+        new_chunks: list[KnowledgeChunk] = []
+        new_metadatas: list[ChunkMetadata] = []
+
+        for i, chunk in enumerate(result.chunks):
+            cid = _make_chunk_id(resolved_config.strategy, document_id, i)
+            did = document_id or chunk.document_id
+
+            # Update metadata with engine-assigned fields
+            meta = (
+                result.metadata[i]
+                if i < len(result.metadata)
+                else ChunkMetadata()
             )
-            return ChunkResult(
-                chunks=chunks,
-                metadata=result.metadata,
-                config=result.config,
-                total_chunks=result.total_chunks,
-                original_length=result.original_length,
+            meta = dataclasses.replace(
+                meta,
+                document_id=did,
+                chunk_index=i,
             )
 
-        return result
+            new_chunks.append(
+                KnowledgeChunk(
+                    chunk_id=cid,
+                    document_id=did,
+                    content=chunk.content,
+                    index=i,
+                    metadata=meta,
+                )
+            )
+            new_metadatas.append(meta)
+
+        return ChunkResult(
+            chunks=tuple(new_chunks),
+            metadata=tuple(new_metadatas),
+            config=result.config,
+            total_chunks=len(new_chunks),
+            original_length=result.original_length,
+        )
 
     # ------------------------------------------------------------------
     # Strategy management
@@ -167,14 +194,9 @@ class ChunkingEngine:
     def reset(self) -> None:
         """Reset the engine to its initial state.
 
-        Resets the default config and re-registers the built-in stub
-        strategies.  Any dynamically registered strategies are cleared.
+        Resets the default config to factory defaults and restores the
+        built-in strategy set.  Any dynamically registered strategies
+        are cleared.
         """
-        from app.rag.chunking.strategies import clear_strategies
-
         self._config = ChunkingConfig()
-        clear_strategies()
-        # Re-register built-in stubs
-        register_strategy(STRATEGY_FIXED_SIZE, _stub_chunk)
-        register_strategy(STRATEGY_RECURSIVE, _stub_chunk)
-        register_strategy(STRATEGY_SENTENCE, _stub_chunk)
+        _register_builtins()
