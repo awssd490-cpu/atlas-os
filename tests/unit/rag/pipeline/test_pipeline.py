@@ -878,3 +878,369 @@ class TestDefaultPipelineDeterministic:
 
         assert r1.metadata["documents_ingested"] == r2.metadata["documents_ingested"]
         assert r1.metadata["chunks_created"] == r2.metadata["chunks_created"]
+
+
+# ======================================================================
+# DefaultKnowledgePipeline — search tests
+# ======================================================================
+
+
+class _SearchTestPipeline:
+    """Helper to build a pipeline pre-loaded with documents for search tests."""
+
+    @staticmethod
+    async def create(
+        docs: list[Any],
+        *,
+        embedding_provider: Any = None,
+        vector_store: Any = None,
+        reranker: Any = None,
+        config: PipelineConfig | None = None,
+        chunk_strategy: str = "whole_document",
+    ) -> DefaultKnowledgePipeline:
+        from app.rag.chunking import ChunkingEngine, ChunkingConfig
+        from app.rag.knowledge_base import KnowledgeBase
+
+        chunk_config = ChunkingConfig(strategy=chunk_strategy, min_chunk_size=1)
+        kb = KnowledgeBase(
+            embedding_provider=embedding_provider,
+            vector_store=vector_store,
+            reranker=reranker,
+        )
+        cfg = config or PipelineConfig(auto_embed=False, auto_index=False)
+
+        pipe = DefaultKnowledgePipeline(
+            loader=_make_loader(docs),
+            chunker=ChunkingEngine(config=chunk_config),
+            knowledge_base=kb,
+            embedding_provider=embedding_provider,
+            vector_store=vector_store,
+            config=cfg,
+        )
+        await pipe.clear()
+        await pipe.ingest_documents(docs)
+        return pipe
+
+
+@pytest.fixture
+def search_docs() -> list[Any]:
+    from app.rag.models import KnowledgeDocument
+    return [
+        KnowledgeDocument(
+            document_id="d1", title="Paris",
+            content="Paris is the capital of France.",
+        ),
+        KnowledgeDocument(
+            document_id="d2", title="London",
+            content="London is the capital of the UK.",
+        ),
+        KnowledgeDocument(
+            document_id="d3", title="Berlin",
+            content="Berlin is the capital of Germany.",
+        ),
+        KnowledgeDocument(
+            document_id="d4", title="Tokyo",
+            content="Tokyo is the capital of Japan.",
+        ),
+    ]
+
+
+class TestDefaultPipelineKeywordSearch:
+    """Keyword-only search through the existing retriever."""
+
+    async def test_keyword_search_returns_results(
+        self, search_docs: list[Any]
+    ) -> None:
+        pipe = await _SearchTestPipeline.create(search_docs)
+        result = await pipe.search("capital France")
+        assert result.context != ""
+        assert "Paris" in result.context
+        assert "capital" in result.context
+
+    async def test_keyword_search_metadata(
+        self, search_docs: list[Any]
+    ) -> None:
+        pipe = await _SearchTestPipeline.create(search_docs)
+        result = await pipe.search("capital")
+        meta = result.metadata
+        assert "query" in meta
+        assert "retrieval_mode" in meta
+        assert "reranking_enabled" in meta
+        assert "chunks_returned" in meta
+        assert "elapsed_time" in meta
+        assert meta["retrieval_mode"] == "keyword"
+        assert meta["reranking_enabled"] is False
+        assert meta["chunks_returned"] > 0
+
+    async def test_stats_updated(
+        self, search_docs: list[Any]
+    ) -> None:
+        pipe = await _SearchTestPipeline.create(search_docs)
+        await pipe.search("capital")
+        s = await pipe.stats()
+        assert s.searches == 1
+        assert s.documents == len(search_docs)
+
+    async def test_repeated_searches_increment(
+        self, search_docs: list[Any]
+    ) -> None:
+        pipe = await _SearchTestPipeline.create(search_docs)
+        await pipe.search("capital")
+        await pipe.search("France")
+        await pipe.search("Japan")
+        s = await pipe.stats()
+        assert s.searches == 3
+
+    async def test_relevance_ranking(
+        self, search_docs: list[Any]
+    ) -> None:
+        """Search for France should rank Paris highest."""
+        pipe = await _SearchTestPipeline.create(search_docs)
+        result = await pipe.search("France")
+        assert "Paris" in result.context
+        assert result.metadata["chunks_returned"] > 0
+
+    async def test_deterministic_ordering(
+        self, search_docs: list[Any]
+    ) -> None:
+        """Same query on same data yields same results."""
+        pipe = await _SearchTestPipeline.create(search_docs)
+        r1 = await pipe.search("capital")
+        await pipe.clear()
+        await pipe.ingest_documents(search_docs)
+        r2 = await pipe.search("capital")
+        assert r1.context == r2.context
+        assert r1.metadata["chunks_returned"] == r2.metadata["chunks_returned"]
+
+    async def test_search_with_max_chunks(
+        self, search_docs: list[Any]
+    ) -> None:
+        pipe = await _SearchTestPipeline.create(search_docs)
+        result = await pipe.search("capital", max_chunks=2)
+        # With max_chunks=2, at most 2 results
+        assert result.metadata["chunks_returned"] <= 2
+
+    async def test_search_with_min_score(
+        self, search_docs: list[Any]
+    ) -> None:
+        pipe = await _SearchTestPipeline.create(search_docs)
+        # High min_score should filter out low-relevance results
+        result = await pipe.search("capital", min_score=100.0)
+        assert result.metadata["chunks_returned"] == 0
+
+
+class TestDefaultPipelineSearchEmpty:
+    """Search behavior with empty or minimal knowledge base."""
+
+    async def test_empty_knowledge_base(self) -> None:
+        from app.rag.chunking import ChunkingEngine, ChunkingConfig
+        from app.rag.knowledge_base import KnowledgeBase
+
+        pipe = DefaultKnowledgePipeline(
+            loader=_make_loader([]),
+            chunker=ChunkingEngine(config=ChunkingConfig(strategy="whole_document", min_chunk_size=1)),
+            knowledge_base=KnowledgeBase(),
+            config=PipelineConfig(auto_embed=False, auto_index=False),
+        )
+        await pipe.clear()
+        result = await pipe.search("anything")
+        assert result.context == ""
+        assert result.metadata["chunks_returned"] == 0
+
+    async def test_empty_query(self, search_docs: list[Any]) -> None:
+        pipe = await _SearchTestPipeline.create(search_docs)
+        result = await pipe.search("")
+        assert result.context == ""
+        assert result.metadata == {}
+
+    async def test_whitespace_query(self, search_docs: list[Any]) -> None:
+        pipe = await _SearchTestPipeline.create(search_docs)
+        result = await pipe.search("   ")
+        assert result.context == ""
+
+
+class TestDefaultPipelineSearchUnicode:
+    """Search with unicode queries and content."""
+
+    async def test_unicode_query(self) -> None:
+        from app.rag.models import KnowledgeDocument
+
+        docs = [
+            KnowledgeDocument(
+                document_id="u1",
+                title="Japanese Capital",
+                content="东京是日本的首都。",
+            ),
+        ]
+        pipe = await _SearchTestPipeline.create(docs)
+        result = await pipe.search("东京")
+        assert result.context != ""
+        assert "东京" in result.context
+
+    async def test_unicode_content_searchable(
+        self, search_docs: list[Any]
+    ) -> None:
+        pipe = await _SearchTestPipeline.create(search_docs)
+        # Ensure unicode documents are still findable with ascii queries
+        result = await pipe.search("Japan")
+        assert result.context != ""
+        assert "Tokyo" in result.context
+
+
+class TestDefaultPipelineHybridSearch:
+    """Hybrid (keyword + semantic) search."""
+
+    async def test_hybrid_search_returns_results(self) -> None:
+        from app.rag.models import KnowledgeDocument
+        from app.rag.embeddings import EmbeddingConfig, DeterministicEmbeddingProvider
+        from app.rag.vectorstore import MemoryVectorStore
+
+        docs = [
+            KnowledgeDocument(document_id="h1", title="Paris", content="Paris is the capital of France."),
+            KnowledgeDocument(document_id="h2", title="London", content="London is the capital of the UK."),
+            KnowledgeDocument(document_id="h3", title="Tokyo", content="Tokyo is the capital of Japan."),
+        ]
+        emb_cfg = EmbeddingConfig(provider_name="det", dimensions=4, normalize_embeddings=True)
+        provider = DeterministicEmbeddingProvider(emb_cfg)
+        vs = MemoryVectorStore()
+
+        pipe = await _SearchTestPipeline.create(
+            docs,
+            embedding_provider=provider,
+            vector_store=vs,
+            config=PipelineConfig(auto_embed=True, auto_index=True),
+        )
+        result = await pipe.search("capital France")
+        assert result.context != ""
+        assert result.metadata["retrieval_mode"] == "hybrid"
+
+    async def test_hybrid_metadata(self) -> None:
+        from app.rag.models import KnowledgeDocument
+        from app.rag.embeddings import EmbeddingConfig, DeterministicEmbeddingProvider
+        from app.rag.vectorstore import MemoryVectorStore
+
+        docs = [
+            KnowledgeDocument(document_id="h1", title="Paris", content="Paris is a city in France."),
+        ]
+        emb_cfg = EmbeddingConfig(provider_name="det", dimensions=4, normalize_embeddings=True)
+        provider = DeterministicEmbeddingProvider(emb_cfg)
+        vs = MemoryVectorStore()
+
+        pipe = await _SearchTestPipeline.create(
+            docs,
+            embedding_provider=provider,
+            vector_store=vs,
+            config=PipelineConfig(auto_embed=True, auto_index=True),
+        )
+        result = await pipe.search("Paris")
+        assert result.metadata["retrieval_mode"] == "hybrid"
+        assert "chunks_returned" in result.metadata
+
+    async def test_hybrid_stats_update(self) -> None:
+        from app.rag.models import KnowledgeDocument
+        from app.rag.embeddings import EmbeddingConfig, DeterministicEmbeddingProvider
+        from app.rag.vectorstore import MemoryVectorStore
+
+        docs = [
+            KnowledgeDocument(document_id="h1", title="Paris", content="Paris is the capital of France."),
+        ]
+        emb_cfg = EmbeddingConfig(provider_name="det", dimensions=4, normalize_embeddings=True)
+        provider = DeterministicEmbeddingProvider(emb_cfg)
+        vs = MemoryVectorStore()
+
+        pipe = await _SearchTestPipeline.create(
+            docs,
+            embedding_provider=provider,
+            vector_store=vs,
+            config=PipelineConfig(auto_embed=True, auto_index=True),
+        )
+        await pipe.search("Paris")
+        s = await pipe.stats()
+        assert s.searches == 1
+
+
+class TestDefaultPipelineSearchWithReranker:
+    """Search with an active reranker."""
+
+    async def test_reranked_search(self) -> None:
+        from app.rag.models import KnowledgeDocument
+        from app.rag.rerank import DefaultReranker, RerankConfig
+
+        docs = [
+            KnowledgeDocument(document_id="r1", title="Paris",
+                              content="Paris is the capital of France. It is known for the Eiffel Tower."),
+            KnowledgeDocument(document_id="r2", title="London",
+                              content="London is the capital of the UK."),
+        ]
+        reranker = DefaultReranker()
+        pipe = await _SearchTestPipeline.create(docs, reranker=reranker)
+        result = await pipe.search("Paris Eiffel Tower")
+        assert result.context != ""
+        assert result.metadata["reranking_enabled"] is True
+
+    async def test_reranked_metadata(self) -> None:
+        from app.rag.models import KnowledgeDocument
+        from app.rag.rerank import DefaultReranker
+
+        docs = [
+            KnowledgeDocument(document_id="r1", title="Paris",
+                              content="Paris is the capital of France."),
+        ]
+        reranker = DefaultReranker()
+        pipe = await _SearchTestPipeline.create(docs, reranker=reranker)
+        result = await pipe.search("capital")
+        meta = result.metadata
+        assert meta["reranking_enabled"] is True
+        assert meta["retrieval_mode"] == "keyword"
+
+    async def test_reranked_stats_update(self) -> None:
+        from app.rag.models import KnowledgeDocument
+        from app.rag.rerank import DefaultReranker
+
+        docs = [
+            KnowledgeDocument(document_id="r1", title="Paris",
+                              content="Paris is the capital of France."),
+        ]
+        reranker = DefaultReranker()
+        pipe = await _SearchTestPipeline.create(docs, reranker=reranker)
+        await pipe.search("capital")
+        s = await pipe.stats()
+        assert s.searches == 1
+
+
+class TestDefaultPipelineSearchDisabledReranker:
+    """Search with a disabled reranker."""
+
+    async def test_disabled_reranker_passthrough(self) -> None:
+        from app.rag.models import KnowledgeDocument
+        from app.rag.rerank import DefaultReranker, RerankConfig
+
+        docs = [
+            KnowledgeDocument(document_id="r1", title="Paris",
+                              content="Paris is the capital of France."),
+        ]
+        config = RerankConfig(enabled=False)
+        reranker = DefaultReranker(config=config)
+        pipe = await _SearchTestPipeline.create(docs, reranker=reranker)
+        result = await pipe.search("capital")
+        assert result.metadata["reranking_enabled"] is False
+        assert result.context != ""
+
+
+class TestDefaultPipelineSearchUnifiedMetadata:
+    """Unified metadata across search scenarios."""
+
+    async def test_metadata_fields_present(
+        self, search_docs: list[Any]
+    ) -> None:
+        pipe = await _SearchTestPipeline.create(search_docs)
+        result = await pipe.search("capital")
+        meta = result.metadata
+        assert "query" in meta
+        assert "retrieval_mode" in meta
+        assert "reranking_enabled" in meta
+        assert "chunks_returned" in meta
+        assert "elapsed_time" in meta
+        assert isinstance(meta["elapsed_time"], float)
+        assert meta["elapsed_time"] >= 0
+        assert meta["query"] == "capital"

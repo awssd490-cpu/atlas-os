@@ -1,8 +1,9 @@
-"""DefaultKnowledgePipeline — the first concrete pipeline.
+"""DefaultKnowledgePipeline — concrete pipeline implementation.
 
-Orchestrates document ingestion: loading, chunking, registering in the
-knowledge base, and optionally generating embeddings and indexing
-vectors.
+Orchestrates document ingestion and search: loading, chunking,
+registering in the knowledge base, optionally generating embeddings
+and indexing vectors, and retrieving results through the existing
+retrieval stack (keyword, hybrid, and reranking).
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import time
 from typing import Any
 
 from app.rag.chunking import ChunkingEngine
+from app.rag.context import KnowledgeContextBuilder
 from app.rag.knowledge_base import KnowledgeBase
 from app.rag.models import KnowledgeDocument
 from app.rag.pipeline.base import KnowledgePipeline
@@ -28,7 +30,7 @@ if True:  # TYPE_CHECKING-compatible import guard
 
 
 class DefaultKnowledgePipeline(KnowledgePipeline):
-    """Concrete pipeline that ingests documents into a KnowledgeBase.
+    """Concrete pipeline that ingests documents and searches a KnowledgeBase.
 
     The pipeline uses an external **loader** callable to produce
     ``KnowledgeDocument`` objects from a path, a **chunker** (typically
@@ -36,11 +38,18 @@ class DefaultKnowledgePipeline(KnowledgePipeline):
     optional **embedding provider** and **vector store** for automatic
     embedding and indexing.
 
+    Search is delegated to the existing retrieval stack via
+    :class:`KnowledgeContextBuilder`, which automatically selects
+    keyword or hybrid retrieval based on the knowledge base's
+    configuration and applies a configured reranker when available.
+
     Behaviour is controlled by :class:`PipelineConfig`:
 
     * ``auto_embed`` — generate embeddings during ingestion.
     * ``auto_index`` — insert vectors into the vector store.
     * ``batch_size`` — chunk count per embedding batch.
+    * ``auto_rerank`` — (reserved for future use; reranking is
+      configured on the ``KnowledgeBase`` directly).
 
     Usage::
 
@@ -52,6 +61,7 @@ class DefaultKnowledgePipeline(KnowledgePipeline):
             vector_store=store,
         )
         count = await pipeline.ingest("/path/to/docs")
+        result = await pipeline.search("search query")
     """
 
     def __init__(
@@ -69,6 +79,14 @@ class DefaultKnowledgePipeline(KnowledgePipeline):
         self._kb = knowledge_base
         self._embedding_provider = embedding_provider
         self._vector_store = vector_store
+
+        # Context builder — delegates to the existing retrieval stack
+        from app.rag.retriever import KnowledgeRetriever
+
+        self._context_builder = KnowledgeContextBuilder(
+            knowledge_base=knowledge_base,
+            retriever=KnowledgeRetriever(knowledge_base) if knowledge_base else None,
+        )
 
         # Mutable counters (PipelineStats is frozen)
         self._doc_count: int = 0
@@ -115,9 +133,6 @@ class DefaultKnowledgePipeline(KnowledgePipeline):
         **kwargs: Any,
     ) -> int:
         """Load documents from *path* and ingest them.
-
-        This method satisfies the :class:`KnowledgePipeline` ABC while
-        accepting a path string as the first argument.
 
         Args:
             path: File-system path or resource identifier understood by
@@ -225,7 +240,7 @@ class DefaultKnowledgePipeline(KnowledgePipeline):
         )
 
     # ------------------------------------------------------------------
-    # Search (stub — not implemented in Checkpoint 2)
+    # Search API
     # ------------------------------------------------------------------
 
     async def search(
@@ -233,14 +248,67 @@ class DefaultKnowledgePipeline(KnowledgePipeline):
         query: str,
         **kwargs: Any,
     ) -> PipelineResult:
-        """Search is not implemented in this checkpoint.
+        """Search the knowledge base for relevant content.
+
+        Delegates to the existing ``KnowledgeContextBuilder`` which
+        automatically selects keyword or hybrid retrieval based on the
+        knowledge base's configuration and applies a configured reranker
+        when available.
+
+        Args:
+            query: The search query string.
+            **kwargs: Forwarded to ``KnowledgeContextBuilder.build()``.
+                Supported options include ``max_chunks``, ``min_score``,
+                and ``format_as``.
+
+        Returns:
+            A ``PipelineResult`` with the generated context text and
+            metadata about the search execution.
 
         Raises:
-            PipelineError: Always, since search is not yet available.
+            PipelineError: On retrieval failures.
         """
-        raise PipelineError(
-            "DefaultKnowledgePipeline.search() is not implemented",
-            code="PIPELINE_SEARCH_NOT_IMPLEMENTED",
+        if not query or not query.strip():
+            return PipelineResult()
+
+        start = time.monotonic()
+
+        max_chunks = kwargs.get("max_chunks", 10)
+        min_score = kwargs.get("min_score", 0.0)
+        format_as = kwargs.get("format_as", "text")
+
+        try:
+            context = await self._context_builder.build(
+                query=query,
+                max_chunks=max_chunks,
+                min_score=min_score,
+                format_as=format_as,
+            )
+        except Exception as exc:
+            raise PipelineError(
+                f"Search failed: {exc}",
+                details={"query": query},
+            ) from exc
+
+        elapsed = time.monotonic() - start
+
+        # Update search counter
+        self._search_count += 1
+
+        # Determine retrieval mode from the knowledge base's capabilities
+        hybrid = self._kb.hybrid_retriever is not None
+        reranker = self._kb.reranker
+        reranking_enabled = reranker is not None and reranker.config.enabled
+
+        return PipelineResult(
+            context=context.text,
+            metadata={
+                "query": query,
+                "retrieval_mode": "hybrid" if hybrid else "keyword",
+                "reranking_enabled": reranking_enabled,
+                "chunks_returned": context.total_chunks,
+                "elapsed_time": round(elapsed, 4),
+            },
         )
 
     # ------------------------------------------------------------------
