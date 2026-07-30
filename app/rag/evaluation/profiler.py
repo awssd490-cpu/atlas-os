@@ -113,15 +113,13 @@ class PerformanceProfiler:
         before_current, before_peak = tracemalloc.get_traced_memory()
         time_start = time.perf_counter()
 
-        result: Any = None
         exception: BaseException | None = None
 
         try:
             val = component(*args, **kwargs)
             if isinstance(val, Awaitable):
-                result = await val
-            else:
-                result = val
+                await val
+            _ = val  # keep reference to prevent premature GC
         except BaseException as exc:
             exception = exc
 
