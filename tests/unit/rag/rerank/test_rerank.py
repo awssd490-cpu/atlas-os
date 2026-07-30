@@ -447,3 +447,117 @@ class TestRerankErrors:
 
     def test_knowledge_error_is_base(self) -> None:
         assert issubclass(RerankError, KnowledgeError)
+
+
+# ======================================================================
+# KnowledgeBase reranker integration
+# ======================================================================
+
+
+class TestKnowledgeBaseReranker:
+    """Reranker integration with KnowledgeBase."""
+
+    def test_no_reranker_by_default(self) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        kb = KnowledgeBase()
+        assert kb.reranker is None
+
+    def test_reranker_property(self) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        reranker = DefaultReranker()
+        kb = KnowledgeBase(reranker=reranker)
+        assert kb.reranker is reranker
+
+    async def test_keyword_reranker_pipeline(self) -> None:
+        """Keyword retrieval + reranker produces reranked context."""
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+        from app.rag.context import KnowledgeContextBuilder
+
+        reranker = DefaultReranker()
+        kb = KnowledgeBase(reranker=reranker)
+        chunk = KnowledgeChunk(chunk_id="c1", document_id="d1",
+                               content="Paris is the capital of France.")
+        kb.register(KnowledgeDocument(document_id="d1", chunks=(chunk,)))
+
+        builder = KnowledgeContextBuilder(kb)
+        context = await builder.build(query="capital France", max_chunks=5)
+        assert context.total_chunks > 0
+        assert len(context.text) > 0
+
+    async def test_reranker_disabled(self) -> None:
+        """Reranker with enabled=False passes through chunks unchanged."""
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+        from app.rag.context import KnowledgeContextBuilder
+
+        config = RerankConfig(enabled=False)
+        reranker = DefaultReranker(config=config)
+        kb = KnowledgeBase(reranker=reranker)
+        chunk = KnowledgeChunk(chunk_id="c1", document_id="d1",
+                               content="Paris is the capital of France.")
+        kb.register(KnowledgeDocument(document_id="d1", chunks=(chunk,)))
+
+        builder = KnowledgeContextBuilder(kb)
+        context = await builder.build(query="capital France", max_chunks=5)
+        assert context.total_chunks > 0
+
+    async def test_empty_results(self) -> None:
+        """Reranker handles empty retrieval results."""
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.context import KnowledgeContextBuilder
+
+        reranker = DefaultReranker()
+        kb = KnowledgeBase(reranker=reranker)
+        builder = KnowledgeContextBuilder(kb)
+        context = await builder.build(query="anything", max_chunks=5)
+        assert context.total_chunks == 0
+
+    async def test_hybrid_reranker_pipeline(self) -> None:
+        """Hybrid retrieval + reranker works end-to-end."""
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.embeddings import DeterministicEmbeddingProvider, EmbeddingConfig as EConfig
+        from app.rag.vectorstore import MemoryVectorStore, VectorStoreConfig, SimilarityMetric
+        from app.rag.context import KnowledgeContextBuilder
+
+        reranker = DefaultReranker()
+        emb_config = EConfig(provider_name="det", dimensions=4, normalize_embeddings=True)
+        provider = DeterministicEmbeddingProvider(emb_config)
+        vs = MemoryVectorStore(config=VectorStoreConfig(metric=SimilarityMetric.COSINE))
+        kb = KnowledgeBase(
+            embedding_provider=provider,
+            vector_store=vs,
+            reranker=reranker,
+        )
+
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+        chunk = KnowledgeChunk(chunk_id="c1", document_id="d1",
+                               content="Paris is the capital of France.")
+        kb.register(KnowledgeDocument(document_id="d1", chunks=(chunk,)))
+        vec = provider._generate(chunk.content)
+        from app.rag.embeddings.models import EmbeddingVector
+        kb._embeddings["c1"] = EmbeddingVector(
+            vector=vec, dimensions=len(vec), provider="det",
+        )
+        vs.add("c1", vec)
+
+        builder = KnowledgeContextBuilder(kb)
+        context = await builder.build(query="capital France", max_chunks=5)
+        assert context.total_chunks > 0
+        assert len(context.text) > 0
+
+    async def test_unicode(self) -> None:
+        """Reranker works with unicode content."""
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+        from app.rag.context import KnowledgeContextBuilder
+
+        reranker = DefaultReranker()
+        kb = KnowledgeBase(reranker=reranker)
+        chunk = KnowledgeChunk(chunk_id="c1", document_id="d1",
+                               content="Paris est la capitale de la France.")
+        kb.register(KnowledgeDocument(document_id="d1", chunks=(chunk,)))
+
+        builder = KnowledgeContextBuilder(kb)
+        context = await builder.build(query="capitale", max_chunks=5)
+        assert context.total_chunks > 0

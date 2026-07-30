@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from app.rag.embeddings.base import EmbeddingProvider
     from app.rag.embeddings.models import EmbeddingVector
     from app.rag.hybrid.retriever import DefaultHybridRetriever
+    from app.rag.rerank.base import Reranker
     from app.rag.vectorstore.base import VectorStore
 
 
@@ -55,6 +56,7 @@ class KnowledgeBase:
         chunking_config: ChunkingConfig | None = None,
         embedding_provider: EmbeddingProvider | None = None,
         vector_store: VectorStore | None = None,
+        reranker: Reranker | None = None,
     ) -> None:
         self._documents: dict[str, KnowledgeDocument] = {}
         self._chunks: dict[str, KnowledgeChunk] = {}
@@ -62,6 +64,7 @@ class KnowledgeBase:
         self._chunking_engine = ChunkingEngine(config=chunking_config)
         self._embedding_provider = embedding_provider
         self._vector_store = vector_store
+        self._reranker = reranker
 
     # ------------------------------------------------------------------
     # Properties
@@ -81,6 +84,11 @@ class KnowledgeBase:
     def vector_store(self) -> VectorStore | None:
         """Return the vector store, or ``None`` if not configured."""
         return self._vector_store
+
+    @property
+    def reranker(self) -> Reranker | None:
+        """Return the reranker, or ``None`` if not configured."""
+        return self._reranker
 
     @property
     def hybrid_retriever(self) -> DefaultHybridRetriever | None:

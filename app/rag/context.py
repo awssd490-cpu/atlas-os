@@ -6,7 +6,7 @@ both contexts before sending to the provider.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.rag.knowledge_base import KnowledgeBase
 from app.rag.models import (
@@ -19,13 +19,17 @@ from app.rag.models import (
 )
 from app.rag.retriever import KnowledgeRetriever
 
+if TYPE_CHECKING:
+    from app.rag.rerank.base import Reranker
+
 
 class KnowledgeContextBuilder:
     """Retrieves knowledge and formats it for provider injection.
 
     Uses hybrid retrieval when the knowledge base has both an embedding
     provider and a vector store configured; otherwise falls back to
-    keyword retrieval.
+    keyword retrieval.  If a reranker is configured on the knowledge
+    base, retrieved results are reranked automatically.
 
     Usage::
 
@@ -58,6 +62,9 @@ class KnowledgeContextBuilder:
         provider and a vector store configured, hybrid retrieval is
         used automatically.  Otherwise keyword retrieval is used.
 
+        If a reranker is configured on the knowledge base, results are
+        reranked before being formatted into the context.
+
         Args:
             query: The search query.
             max_chunks: Maximum chunks to include.
@@ -84,7 +91,7 @@ class KnowledgeContextBuilder:
         max_chunks: int,
         min_score: float,
     ) -> KnowledgeContext:
-        """Build context using keyword retrieval."""
+        """Build context using keyword retrieval, optionally reranked."""
         kg_query = KnowledgeQuery(
             query=query,
             max_results=max_chunks,
@@ -94,6 +101,11 @@ class KnowledgeContextBuilder:
 
         if not result.chunks:
             return KnowledgeContext(total_chunks=0)
+
+        # Rerank if configured
+        reranker = getattr(self._kb, "reranker", None) if self._kb else None
+        if reranker is not None:
+            return await self._apply_reranker(reranker, query, result.chunks, max_chunks)
 
         text = self._format_chunks(result.chunks)
 
@@ -110,7 +122,7 @@ class KnowledgeContextBuilder:
         query: str,
         max_chunks: int,
     ) -> KnowledgeContext:
-        """Build context using hybrid retrieval, then map to KnowledgeChunks."""
+        """Build context using hybrid retrieval, optionally reranked."""
         hy_result = await hybrid.retrieve(query, top_k=max_chunks)
 
         if not hy_result.results:
@@ -134,6 +146,11 @@ class KnowledgeContextBuilder:
                 score=rs.final_score,
             ))
 
+        # Rerank if configured
+        reranker = getattr(self._kb, "reranker", None) if self._kb else None
+        if reranker is not None:
+            return await self._apply_reranker(reranker, query, chunks, max_chunks)
+
         text = self._format_chunks(chunks)
 
         return KnowledgeContext(
@@ -142,6 +159,83 @@ class KnowledgeContextBuilder:
             sources=sources,
             total_chunks=len(chunks),
         )
+
+    async def _apply_reranker(
+        self,
+        reranker: Reranker,
+        query: str,
+        chunks: list[KnowledgeChunk],
+        max_chunks: int,
+    ) -> KnowledgeContext:
+        """Apply a reranker to a list of chunks and produce a KnowledgeContext.
+
+        If the reranker is disabled via ``config.enabled``, the chunks
+        are returned in their original order without reranking.
+        """
+        # Check if reranking is enabled
+        if not reranker.config.enabled:
+            text = self._format_chunks(chunks)
+            sources = self._build_sources(chunks)
+            return KnowledgeContext(text=text, chunks=chunks, sources=sources, total_chunks=len(chunks))
+
+        # Build content lookup from the chunk list
+        content_map = {c.chunk_id: c.content for c in chunks}
+        if hasattr(reranker, 'content_provider') and reranker.content_provider is None:  # type: ignore
+            reranker._content_provider = content_map.get  # type: ignore
+
+        # Collect (chunk_id, score) pairs
+        results: list[tuple[str, float]] = [
+            (c.chunk_id, 0.0) for c in chunks
+        ]
+
+        response = await reranker.rerank(query, results)
+        reranked_ids = {r.chunk_id: r.final_score for r in response.results}
+
+        # Reorder chunks by reranked score
+        id_order = [r.chunk_id for r in response.results]
+        chunk_map = {c.chunk_id: c for c in chunks}
+
+        reranked_chunks: list[KnowledgeChunk] = []
+        for cid in id_order:
+            chunk = chunk_map.get(cid)
+            if chunk is not None:
+                reranked_chunks.append(chunk)
+
+        sources = [
+            KnowledgeSource(
+                document_id=reranked_chunks[i].document_id,
+                chunk_id=reranked_chunks[i].chunk_id,
+                title=(
+                    doc.title
+                    if (doc := (self._kb.get(reranked_chunks[i].document_id) if self._kb else None))
+                    else ""
+                ),
+                score=reranked_ids.get(reranked_chunks[i].chunk_id, 0.0),
+            )
+            for i in range(len(reranked_chunks))
+        ]
+
+        text = self._format_chunks(reranked_chunks)
+
+        return KnowledgeContext(
+            text=text,
+            chunks=reranked_chunks,
+            sources=sources,
+            total_chunks=len(reranked_chunks),
+        )
+
+    def _build_sources(self, chunks: list[KnowledgeChunk]) -> list[KnowledgeSource]:
+        """Build KnowledgeSource entries for a list of chunks."""
+        sources: list[KnowledgeSource] = []
+        for chunk in chunks:
+            doc = self._kb.get(chunk.document_id) if self._kb else None  # type: ignore[union-attr]
+            sources.append(KnowledgeSource(
+                document_id=chunk.document_id,
+                chunk_id=chunk.chunk_id,
+                title=doc.title if doc else "",
+                score=0.0,
+            ))
+        return sources
 
     @staticmethod
     def _format_chunks(chunks: list[Any]) -> str:
