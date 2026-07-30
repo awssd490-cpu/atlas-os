@@ -46,7 +46,7 @@ class ResourceManager:
     # Registration
     # ------------------------------------------------------------------
 
-    def register(self, name: str, resource: object = None) -> ManagedResource:  # type: ignore[assignment]
+    def register(self, name: str, resource: Any = None) -> ManagedResource:
         """Register a resource.
 
         Args:
