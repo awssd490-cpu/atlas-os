@@ -1,9 +1,34 @@
+[build-system]
+requires = ["setuptools>=69.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "atlas"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.11.0"
+description = "AI Operating System — modular framework for intelligent agents, memory, RAG, and workflows"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
+authors = [
+    {name = "Atlas Contributors"},
+]
+maintainers = [
+    {name = "Atlas Contributors"},
+]
+keywords = [
+    "ai", "agent", "rag", "retrieval", "framework",
+    "llm", "knowledge-base", "embeddings", "vector-store",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Operating System :: OS Independent",
+]
+
 dependencies = [
     "fastapi>=0.140.7",
     "httpx>=0.28.1",
@@ -16,11 +41,43 @@ dependencies = [
     "uvicorn>=0.51.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/your-org/atlas"
+Repository = "https://github.com/your-org/atlas"
+Documentation = "https://github.com/your-org/atlas/tree/main/docs"
+Issues = "https://github.com/your-org/atlas/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "coverage>=7.0",
+]
+docs = [
+]
+benchmark = [
+]
+providers = [
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "coverage>=7.0",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80
+
+[tool.setuptools.packages.find]
+include = ["app*"]

@@ -1,0 +1,17 @@
+include README.md
+include LICENSE
+include NOTICE
+include CHANGELOG.md
+include CONTRIBUTING.md
+include SECURITY.md
+include pyproject.toml
+
+recursive-include docs *.md
+recursive-include examples *.py
+recursive-include templates * *
+
+prune app/**/__pycache__
+prune **/*.pyc
+prune **/*.pyo
+prune **/.pytest_cache
+prune **/.git

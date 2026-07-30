@@ -1,0 +1,26 @@
+Atlas — AI Operating System
+
+Copyright (c) 2024-2026 Atlas Contributors
+
+This product includes software developed by Atlas Contributors
+(https://github.com/your-org/atlas).
+
+Licensed under the MIT License (see LICENSE file).
+
+--------------------------------------------------------------------------------
+Third-Party Notices
+--------------------------------------------------------------------------------
+
+This project uses the following third-party packages:
+
+- fastapi (BSD-3-Clause) — Web framework
+- httpx (BSD-3-Clause) — HTTP client
+- loguru (MIT) — Logging
+- pydantic (MIT) — Data validation
+- pydantic-settings (MIT) — Settings management
+- python-dotenv (BSD-3-Clause) — Environment variables
+- rich (MIT) — Terminal formatting
+- sqlalchemy (MIT) — ORM
+- uvicorn (BSD-3-Clause) — ASGI server
+
+See the respective package licenses for full terms.
