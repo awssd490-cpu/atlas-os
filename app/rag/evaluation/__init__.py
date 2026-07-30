@@ -10,6 +10,7 @@ a coherent evaluation lifecycle.
 from __future__ import annotations
 
 from app.rag.evaluation.base import EvaluationRunner
+from app.rag.evaluation.benchmark import BenchmarkRunner
 from app.rag.evaluation.config import EvaluationConfig
 from app.rag.evaluation.errors import (
     EvaluationError,
@@ -28,6 +29,7 @@ from app.rag.evaluation.retrieval_metrics import RetrievalMetrics
 
 __all__ = [
     "BenchmarkResult",
+    "BenchmarkRunner",
     "EvaluationConfig",
     "EvaluationError",
     "EvaluationNotFound",

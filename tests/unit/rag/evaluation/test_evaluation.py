@@ -8,6 +8,7 @@ import pytest
 
 from app.rag.evaluation import (
     BenchmarkResult,
+    BenchmarkRunner,
     EvaluationConfig,
     EvaluationError,
     EvaluationNotFound,
@@ -22,6 +23,7 @@ from app.rag.evaluation import (
     unregister,
 )
 from app.rag.evaluation.base import EvaluationRunner as EvaluationRunner_Impl
+from app.rag.evaluation.benchmark import BenchmarkRunner as BenchmarkRunner_Impl
 from app.rag.evaluation.config import EvaluationConfig as EvaluationConfig_Impl
 from app.rag.evaluation.errors import EvaluationError as EvaluationError_Impl
 from app.rag.evaluation.errors import EvaluationNotFound as EvaluationNotFound_Impl
@@ -69,6 +71,9 @@ class TestImports:
 
     def test_retrieval_metrics_imported(self) -> None:
         assert RetrievalMetrics is RetrievalMetrics_Impl
+
+    def test_benchmark_runner_imported(self) -> None:
+        assert BenchmarkRunner is BenchmarkRunner_Impl
 
 
 # ======================================================================
@@ -164,16 +169,34 @@ class TestBenchmarkResult:
         assert r.throughput == 0.0
         assert r.memory_bytes == 0
         assert r.metadata == {}
+        assert r.average_latency_ms == 0.0
+        assert r.min_latency_ms == 0.0
+        assert r.max_latency_ms == 0.0
+        assert r.throughput_qps == 0.0
+        assert r.total_queries == 0
+        assert r.total_duration == 0.0
 
     def test_custom_values(self) -> None:
         r = BenchmarkResult(
             latency_ms=45.2,
             throughput=220.0,
+            average_latency_ms=45.2,
+            min_latency_ms=12.0,
+            max_latency_ms=98.0,
+            throughput_qps=220.0,
+            total_queries=50,
+            total_duration=250.0,
             memory_bytes=1048576,
             metadata={"batch_size": 32},
         )
         assert r.latency_ms == 45.2
         assert r.throughput == 220.0
+        assert r.average_latency_ms == 45.2
+        assert r.min_latency_ms == 12.0
+        assert r.max_latency_ms == 98.0
+        assert r.throughput_qps == 220.0
+        assert r.total_queries == 50
+        assert r.total_duration == 250.0
         assert r.memory_bytes == 1048576
         assert r.metadata == {"batch_size": 32}
 
@@ -181,6 +204,16 @@ class TestBenchmarkResult:
         r = BenchmarkResult()
         with pytest.raises(AttributeError):
             r.latency_ms = 10.0  # type: ignore[misc]
+        with pytest.raises(AttributeError):
+            r.average_latency_ms = 5.0  # type: ignore[misc]
+
+    def test_backward_compat_latency_alias(self) -> None:
+        r = BenchmarkResult(latency_ms=33.0, average_latency_ms=33.0)
+        assert r.latency_ms == r.average_latency_ms
+
+    def test_backward_compat_throughput_alias(self) -> None:
+        r = BenchmarkResult(throughput=150.0, throughput_qps=150.0)
+        assert r.throughput == r.throughput_qps
 
 
 # ======================================================================
@@ -721,3 +754,269 @@ class TestRetrievalMetricsEdgeCases:
         """F1 where P=0, R=1 (empty relevant) should be 0."""
         f = metrics.f1_at_k(["a"], set(), k=1)
         assert f == 0.0
+
+
+# ======================================================================
+# BenchmarkRunner
+# ======================================================================
+
+
+class _AsyncId:
+    """Async callable that returns its input (instant)."""
+
+    async def __call__(self, query: str) -> str:
+        return query
+
+
+class _AsyncDelayed:
+    """Async callable that simulates a fixed delay."""
+
+    def __init__(self, delay_s: float = 0.01) -> None:
+        self._delay = delay_s
+
+    async def __call__(self, query: str) -> str:
+        import asyncio
+        await asyncio.sleep(self._delay)
+        return query
+
+
+class _AsyncFailing:
+    """Async callable that raises for a specific query."""
+
+    def __init__(self, fail_on: str = "fail") -> None:
+        self._fail_on = fail_on
+
+    async def __call__(self, query: str) -> str:
+        if query == self._fail_on:
+            raise ValueError(f"Failed on: {query}")
+        return query
+
+
+class TestBenchmarkRunner:
+    """BenchmarkRunner construction and configuration."""
+
+    def test_default_config(self) -> None:
+        runner = BenchmarkRunner()
+        assert runner.config.warmup_runs == 3
+        assert runner.config.benchmark_runs == 10
+
+    def test_custom_config(self) -> None:
+        config = EvaluationConfig(warmup_runs=5, benchmark_runs=20)
+        runner = BenchmarkRunner(config=config)
+        assert runner.config.warmup_runs == 5
+        assert runner.config.benchmark_runs == 20
+
+
+class TestBenchmarkRunnerRun:
+    """BenchmarkRunner.run() behaviour."""
+
+    @pytest.mark.asyncio
+    async def test_basic_run(self) -> None:
+        runner = BenchmarkRunner()
+        result = await runner.run(
+            _AsyncId(),
+            ["q1", "q2", "q3"],
+            warmup_runs=1,
+            benchmark_runs=2,
+        )
+        assert result.total_queries == 6  # 3 queries × 2 benchmark_runs
+        assert result.average_latency_ms >= 0
+        assert result.min_latency_ms >= 0
+        assert result.max_latency_ms >= 0
+        assert result.min_latency_ms <= result.average_latency_ms <= result.max_latency_ms
+
+    @pytest.mark.asyncio
+    async def test_latency_measurement(self) -> None:
+        """Delayed component should produce measurable latency."""
+        runner = BenchmarkRunner()
+        result = await runner.run(
+            _AsyncDelayed(0.005),
+            ["q1"],
+            warmup_runs=1,
+            benchmark_runs=3,
+        )
+        # Each call should take at least 5ms
+        assert result.average_latency_ms >= 5.0
+        assert result.min_latency_ms >= 5.0
+        assert result.total_queries == 3
+
+    @pytest.mark.asyncio
+    async def test_throughput_qps(self) -> None:
+        """Throughput should be positive for non-zero duration."""
+        runner = BenchmarkRunner()
+        result = await runner.run(
+            _AsyncId(),
+            ["q1", "q2"],
+            warmup_runs=1,
+            benchmark_runs=5,
+        )
+        assert result.throughput_qps > 0
+        assert result.throughput > 0
+
+    @pytest.mark.asyncio
+    async def test_throughput_decreases_with_delay(self) -> None:
+        """Slower component lower throughput."""
+        runner = BenchmarkRunner()
+        fast = await runner.run(
+            _AsyncId(),
+            ["q1"],
+            warmup_runs=1,
+            benchmark_runs=5,
+        )
+        slow = await runner.run(
+            _AsyncDelayed(0.01),
+            ["q1"],
+            warmup_runs=1,
+            benchmark_runs=5,
+        )
+        assert fast.throughput_qps > slow.throughput_qps
+
+    @pytest.mark.asyncio
+    async def test_empty_dataset(self) -> None:
+        """Empty dataset should return a nominal result."""
+        runner = BenchmarkRunner()
+        result = await runner.run(
+            _AsyncId(),
+            [],
+            warmup_runs=1,
+            benchmark_runs=5,
+        )
+        assert result.total_queries == 0
+        assert result.average_latency_ms == 0.0
+
+    @pytest.mark.asyncio
+    async def test_single_query(self) -> None:
+        runner = BenchmarkRunner()
+        result = await runner.run(
+            _AsyncId(),
+            ["only_query"],
+            warmup_runs=0,
+            benchmark_runs=1,
+        )
+        assert result.total_queries == 1
+        assert result.average_latency_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_benchmark_runs_one(self) -> None:
+        runner = BenchmarkRunner()
+        result = await runner.run(
+            _AsyncId(),
+            ["q1", "q2"],
+            warmup_runs=0,
+            benchmark_runs=1,
+        )
+        assert result.total_queries == 2
+
+    @pytest.mark.asyncio
+    async def test_warmup_skipped_from_timing(self) -> None:
+        """Warmup iterations should not affect timing."""
+        runner = BenchmarkRunner()
+        result = await runner.run(
+            _AsyncDelayed(0.001),
+            ["q1"],
+            warmup_runs=10,
+            benchmark_runs=3,
+        )
+        assert result.total_queries == 3  # Only benchmark runs counted
+
+    @pytest.mark.asyncio
+    async def test_custom_run_counts(self) -> None:
+        runner = BenchmarkRunner()
+        result = await runner.run(
+            _AsyncId(),
+            ["q1"],
+            warmup_runs=0,
+            benchmark_runs=7,
+        )
+        assert result.total_queries == 7
+
+    @pytest.mark.asyncio
+    async def test_uses_default_config(self) -> None:
+        config = EvaluationConfig(warmup_runs=2, benchmark_runs=5)
+        runner = BenchmarkRunner(config=config)
+        result = await runner.run(
+            _AsyncId(),
+            ["q1"],
+        )
+        assert result.total_queries == 5  # from config
+
+    @pytest.mark.asyncio
+    async def test_exception_during_warmup(self) -> None:
+        runner = BenchmarkRunner()
+        with pytest.raises(EvaluationError) as exc:
+            await runner.run(
+                _AsyncFailing(fail_on="bad"),
+                ["bad"],
+                warmup_runs=1,
+                benchmark_runs=0,
+            )
+        assert "warm-up" in str(exc.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_exception_during_benchmark(self) -> None:
+        runner = BenchmarkRunner()
+        with pytest.raises(EvaluationError) as exc:
+            await runner.run(
+                _AsyncFailing(fail_on="bad"),
+                ["good", "bad"],
+                warmup_runs=0,
+                benchmark_runs=1,
+            )
+        assert "benchmark" in str(exc.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_deterministic_latency(self) -> None:
+        """Same component and dataset should produce same stats."""
+        runner = BenchmarkRunner()
+        r1 = await runner.run(
+            _AsyncDelayed(0.002),
+            ["q1", "q2"],
+            warmup_runs=1,
+            benchmark_runs=5,
+        )
+        r2 = await runner.run(
+            _AsyncDelayed(0.002),
+            ["q1", "q2"],
+            warmup_runs=1,
+            benchmark_runs=5,
+        )
+        assert abs(r1.average_latency_ms - r2.average_latency_ms) < 10.0
+
+    @pytest.mark.asyncio
+    async def test_metadata(self) -> None:
+        runner = BenchmarkRunner()
+        result = await runner.run(
+            _AsyncId(),
+            ["q1", "q2"],
+            warmup_runs=2,
+            benchmark_runs=3,
+        )
+        meta = result.metadata
+        assert meta["warmup_runs"] == 2
+        assert meta["benchmark_runs"] == 3
+        assert meta["dataset_size"] == 2
+        assert meta["latency_samples"] == 6  # 2 queries * 3 runs
+
+    @pytest.mark.asyncio
+    async def test_min_max_latency(self) -> None:
+        """min <= avg <= max should always hold."""
+        runner = BenchmarkRunner()
+        result = await runner.run(
+            _AsyncDelayed(0.003),
+            ["q1", "q2", "q3"],
+            warmup_runs=1,
+            benchmark_runs=10,
+        )
+        assert result.min_latency_ms <= result.average_latency_ms <= result.max_latency_ms
+
+    @pytest.mark.asyncio
+    async def test_total_duration(self) -> None:
+        """Total duration should be positive when benchmark runs complete."""
+        runner = BenchmarkRunner()
+        result = await runner.run(
+            _AsyncDelayed(0.002),
+            ["q1"],
+            warmup_runs=0,
+            benchmark_runs=5,
+        )
+        assert result.total_duration > 0

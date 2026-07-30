@@ -33,8 +33,17 @@ class BenchmarkResult:
     """The result of a benchmark run.
 
     Attributes:
-        latency_ms: Measured latency in milliseconds.
-        throughput: Measured throughput in operations per second.
+        latency_ms: Average latency in milliseconds (alias for
+            ``average_latency_ms``).
+        throughput: Measured throughput in operations per second
+            (alias for ``throughput_qps``).
+        average_latency_ms: Mean latency across all benchmark runs.
+        min_latency_ms: Minimum observed latency.
+        max_latency_ms: Maximum observed latency.
+        throughput_qps: Queries per second (total queries / total
+            duration).
+        total_queries: Number of queries benchmarked.
+        total_duration: Total benchmark duration in milliseconds.
         memory_bytes: Memory usage in bytes during the benchmark.
         metadata: Optional metadata about the benchmark (system info,
             configuration, environment, etc.).
@@ -42,5 +51,11 @@ class BenchmarkResult:
 
     latency_ms: float = 0.0
     throughput: float = 0.0
+    average_latency_ms: float = 0.0
+    min_latency_ms: float = 0.0
+    max_latency_ms: float = 0.0
+    throughput_qps: float = 0.0
+    total_queries: int = 0
+    total_duration: float = 0.0
     memory_bytes: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
