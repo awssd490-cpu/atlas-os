@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.rag.chunking import ChunkingConfig, ChunkingEngine
 from app.rag.errors import (
     DocumentNotFoundError,
     DuplicateDocumentError,
@@ -25,18 +26,27 @@ class KnowledgeBase:
     Supports registration, removal, and enumeration of documents.
     Storage-agnostic — currently uses in-memory dicts.
 
+    Adding a document via ``add_document()`` automatically chunks the
+    content through the built-in ``ChunkingEngine``.  Callers that need
+    full control over chunk boundaries can still use ``register()`` with
+    pre-built chunks.
+
     Usage::
 
         kb = KnowledgeBase()
         doc = KnowledgeDocument(document_id="doc_1", title="Paris", content="...")
-        kb.register(doc)
+        kb.add_document(doc)
         found = kb.get("doc_1")
         kb.remove("doc_1")
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        chunking_config: ChunkingConfig | None = None,
+    ) -> None:
         self._documents: dict[str, KnowledgeDocument] = {}
         self._chunks: dict[str, KnowledgeChunk] = {}
+        self._chunking_engine = ChunkingEngine(config=chunking_config)
 
     # ------------------------------------------------------------------
     # Registration
@@ -44,6 +54,10 @@ class KnowledgeBase:
 
     def register(self, document: KnowledgeDocument) -> KnowledgeDocument:
         """Register a document in the knowledge base.
+
+        The document is stored as-is with its existing ``chunks`` tuple.
+        No automatic chunking is performed — use ``add_document()``
+        when you want the document content to be chunked automatically.
 
         Args:
             document: The document to register.
@@ -55,19 +69,53 @@ class KnowledgeBase:
             DuplicateDocumentError: If a document with the same ID is
                 already registered.
         """
-        if document.document_id in self._documents:
-            raise DuplicateDocumentError(
-                name=document.document_id,
-                details={"title": document.title},
-            )
-
-        self._documents[document.document_id] = document
-
-        # Index chunks
-        for chunk in document.chunks:
-            self._chunks[chunk.chunk_id] = chunk
-
+        self._raise_if_duplicate(document)
+        self._store_document(document)
         return document
+
+    def add_document(
+        self,
+        document: KnowledgeDocument,
+        *,
+        config: ChunkingConfig | None = None,
+    ) -> KnowledgeDocument:
+        """Add a document and automatically chunk its content.
+
+        The document content is passed through the ``ChunkingEngine``
+        which produces ``KnowledgeChunk`` objects according to the
+        configured (or passed) strategy.  The resulting chunks are
+        stored alongside the document.
+
+        Args:
+            document: The document to add.
+            config: Optional per-call chunking configuration.  Falls
+                back to the engine's default if omitted.
+
+        Returns:
+            The document with its ``chunks`` tuple populated.
+
+        Raises:
+            DuplicateDocumentError: If a document with the same ID is
+                already registered.
+        """
+        self._raise_if_duplicate(document)
+
+        result = self._chunking_engine.chunk(
+            document.content,
+            config=config,
+            document_id=document.document_id,
+        )
+
+        chunked_doc = KnowledgeDocument(
+            document_id=document.document_id,
+            title=document.title,
+            content=document.content,
+            chunks=result.chunks,
+            metadata=document.metadata,
+        )
+
+        self._store_document(chunked_doc)
+        return chunked_doc
 
     def remove(self, document_id: str) -> bool:
         """Remove a document from the knowledge base.
@@ -138,3 +186,28 @@ class KnowledgeBase:
         """Remove all documents and chunks."""
         self._documents.clear()
         self._chunks.clear()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _raise_if_duplicate(self, document: KnowledgeDocument) -> None:
+        if document.document_id in self._documents:
+            raise DuplicateDocumentError(
+                name=document.document_id,
+                details={"title": document.title},
+            )
+
+    def _store_document(self, document: KnowledgeDocument) -> None:
+        self._documents[document.document_id] = document
+        for chunk in document.chunks:
+            self._chunks[chunk.chunk_id] = chunk
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def chunking_config(self) -> ChunkingConfig:
+        """Return the chunking configuration in use."""
+        return self._chunking_engine.config
