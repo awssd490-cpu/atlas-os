@@ -18,6 +18,8 @@ from app.rag.evaluation import (
     EvaluationRunner,
     EvaluationSample,
     InvalidEvaluationConfiguration,
+    PerformanceProfile,
+    PerformanceProfiler,
     RetrievalMetrics,
     clear_runners,
     get,
@@ -35,6 +37,8 @@ from app.rag.evaluation.errors import EvaluationError as EvaluationError_Impl
 from app.rag.evaluation.errors import EvaluationNotFound as EvaluationNotFound_Impl
 from app.rag.evaluation.models import BenchmarkResult as BenchmarkResult_Impl
 from app.rag.evaluation.models import EvaluationResult as EvaluationResult_Impl
+from app.rag.evaluation.profiler import PerformanceProfile as PerformanceProfile_Impl
+from app.rag.evaluation.profiler import PerformanceProfiler as PerformanceProfiler_Impl
 from app.rag.evaluation.retrieval_metrics import RetrievalMetrics as RetrievalMetrics_Impl
 from app.rag.errors import KnowledgeError
 
@@ -89,6 +93,12 @@ class TestImports:
 
     def test_dataset_loader_imported(self) -> None:
         assert DatasetLoader is DatasetLoader_Impl
+
+    def test_performance_profile_imported(self) -> None:
+        assert PerformanceProfile is PerformanceProfile_Impl
+
+    def test_performance_profiler_imported(self) -> None:
+        assert PerformanceProfiler is PerformanceProfiler_Impl
 
 
 # ======================================================================
@@ -1420,3 +1430,164 @@ class TestDatasetLoaderEmpty:
         loaded = DatasetLoader.from_json(path)
         assert loaded.size == 0
         assert loaded.is_empty
+
+
+# ======================================================================
+# PerformanceProfile
+# ======================================================================
+
+
+class TestPerformanceProfile:
+    """PerformanceProfile frozen dataclass."""
+
+    def test_default_values(self) -> None:
+        p = PerformanceProfile()
+        assert p.execution_time_ms == 0.0
+        assert p.peak_memory_bytes == 0
+        assert p.current_memory_bytes == 0
+        assert p.metadata == {}
+
+    def test_custom_values(self) -> None:
+        p = PerformanceProfile(
+            execution_time_ms=15.3,
+            peak_memory_bytes=2048,
+            current_memory_bytes=1024,
+            metadata={"component": "search"},
+        )
+        assert p.execution_time_ms == 15.3
+        assert p.peak_memory_bytes == 2048
+        assert p.current_memory_bytes == 1024
+        assert p.metadata == {"component": "search"}
+
+    def test_immutable(self) -> None:
+        p = PerformanceProfile()
+        with pytest.raises(AttributeError):
+            p.execution_time_ms = 5.0  # type: ignore[misc]
+
+
+# ======================================================================
+# PerformanceProfiler
+# ======================================================================
+
+
+def _sync_fn(a: int, b: int = 0) -> int:
+    """Synchronous test function."""
+    _ = [i for i in range(1000)]
+    return a + b
+
+
+async def _async_fn(x: str) -> str:
+    """Asynchronous test function."""
+    import asyncio
+    await asyncio.sleep(0.001)
+    return x.upper()
+
+
+def _failing_fn() -> None:
+    """Function that always raises."""
+    raise ValueError("intentional failure")
+
+
+class TestPerformanceProfiler:
+    """PerformanceProfiler tests."""
+
+    @pytest.fixture(autouse=True)
+    def cleanup_tracing(self) -> None:
+        PerformanceProfiler.stop_tracing()
+        yield
+        PerformanceProfiler.stop_tracing()
+
+    async def test_profile_sync(self) -> None:
+        profiler = PerformanceProfiler()
+        profile = await profiler.profile(_sync_fn, 1, b=2)
+        assert isinstance(profile, PerformanceProfile)
+        assert profile.execution_time_ms >= 0
+        assert profile.metadata["component"] == "_sync_fn"
+
+    async def test_profile_async(self) -> None:
+        profiler = PerformanceProfiler()
+        profile = await profiler.profile(_async_fn, "hello")
+        assert isinstance(profile, PerformanceProfile)
+        assert profile.execution_time_ms >= 0
+        assert profile.metadata["component"] == "_async_fn"
+
+    async def test_profile_sync_result(self) -> None:
+        profiler = PerformanceProfiler()
+        profile = await profiler.profile(_sync_fn, 3, b=4)
+        assert profile.execution_time_ms >= 0
+
+    async def test_profile_async_result(self) -> None:
+        profiler = PerformanceProfiler()
+        profile = await profiler.profile(_async_fn, "world")
+        assert profile.execution_time_ms >= 0
+
+    async def test_execution_time_recorded(self) -> None:
+        profiler = PerformanceProfiler()
+
+        async def fast() -> None:
+            pass
+
+        async def slow() -> None:
+            import asyncio
+            await asyncio.sleep(0.01)
+
+        fast_profile = await profiler.profile(fast)
+        slow_profile = await profiler.profile(slow)
+        assert slow_profile.execution_time_ms >= fast_profile.execution_time_ms
+        assert slow_profile.execution_time_ms >= 10.0
+
+    async def test_memory_recorded(self) -> None:
+        profiler = PerformanceProfiler()
+        profile = await profiler.profile(_sync_fn, 0)
+        assert isinstance(profile.peak_memory_bytes, int)
+        assert isinstance(profile.current_memory_bytes, int)
+        assert profile.peak_memory_bytes >= 0
+        assert profile.current_memory_bytes >= 0
+
+    async def test_args_kwargs(self) -> None:
+        profiler = PerformanceProfiler()
+        profile = await profiler.profile(_sync_fn, 10, b=20)
+        assert profile.execution_time_ms >= 0
+
+    async def test_exception_propagation(self) -> None:
+        profiler = PerformanceProfiler()
+        with pytest.raises(EvaluationError) as exc:
+            await profiler.profile(_failing_fn)
+        assert "intentional failure" in str(exc.value)
+
+    async def test_cleanup_after_exception(self) -> None:
+        profiler = PerformanceProfiler()
+        with pytest.raises(EvaluationError):
+            await profiler.profile(_failing_fn)
+        profile = await profiler.profile(_sync_fn, 0)
+        assert profile.execution_time_ms >= 0
+
+    async def test_non_callable_raises(self) -> None:
+        profiler = PerformanceProfiler()
+        with pytest.raises(EvaluationError) as exc:
+            await profiler.profile("not callable")  # type: ignore[arg-type]
+        assert "callable" in str(exc.value).lower()
+
+    async def test_deterministic_metadata(self) -> None:
+        profiler = PerformanceProfiler()
+        p1 = await profiler.profile(_sync_fn, 5)
+        p2 = await profiler.profile(_sync_fn, 5)
+        assert p1.metadata["component"] == p2.metadata["component"]
+
+    async def test_start_stop_tracing(self) -> None:
+        PerformanceProfiler.start_tracing()
+        import tracemalloc
+        assert tracemalloc.is_tracing()
+        PerformanceProfiler.stop_tracing()
+        assert not tracemalloc.is_tracing()
+
+    async def test_get_traced_memory(self) -> None:
+        current, peak = PerformanceProfiler.get_traced_memory()
+        assert isinstance(current, int)
+        assert isinstance(peak, int)
+
+    async def test_get_traced_memory_no_tracing(self) -> None:
+        PerformanceProfiler.stop_tracing()
+        current, peak = PerformanceProfiler.get_traced_memory()
+        assert current == 0
+        assert peak == 0

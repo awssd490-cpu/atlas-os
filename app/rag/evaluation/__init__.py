@@ -26,6 +26,7 @@ from app.rag.evaluation.registry import (
     register,
     unregister,
 )
+from app.rag.evaluation.profiler import PerformanceProfile, PerformanceProfiler
 from app.rag.evaluation.retrieval_metrics import RetrievalMetrics
 
 __all__ = [
@@ -40,6 +41,8 @@ __all__ = [
     "EvaluationRunner",
     "EvaluationSample",
     "InvalidEvaluationConfiguration",
+    "PerformanceProfile",
+    "PerformanceProfiler",
     "RetrievalMetrics",
     "clear_runners",
     "get",
