@@ -1,0 +1,3 @@
+# Atlas RAG framework — minimal requirements
+# Install from your local copy or package registry
+-e ../../

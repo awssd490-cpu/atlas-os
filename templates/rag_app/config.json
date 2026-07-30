@@ -1,0 +1,10 @@
+{
+  "environment": "development",
+  "debug": true,
+  "log_level": "DEBUG",
+  "random_seed": 42,
+  "metadata": {
+    "app_name": "rag-app",
+    "version": "1.0.0"
+  }
+}
