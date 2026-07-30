@@ -1393,3 +1393,349 @@ class TestJsonBackendLoadRoundTrip:
         assert kb1.count() == kb2.count()
         assert kb1.get("doc_1").title == kb2.get("doc_1").title
         assert len(kb1.get("doc_1").chunks) == len(kb2.get("doc_1").chunks)
+
+
+# ======================================================================
+# JsonPersistenceBackend — update tests
+# ======================================================================
+
+
+class TestJsonBackendUpdateEmpty:
+    """Update on a non-existent snapshot falls back to full save."""
+
+    async def test_update_no_snapshot(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend()
+        result = await backend.update(tmp_path, populated_kb)
+        assert result.success is True
+        assert result.metadata["documents"] == 1
+        assert await backend.exists(tmp_path) is True
+
+    async def test_update_no_snapshot_empty_kb(self, tmp_path: str, empty_kb: Any) -> None:
+        backend = JsonPersistenceBackend()
+        result = await backend.update(tmp_path, empty_kb)
+        assert result.success is True
+        assert result.metadata["documents"] == 0
+
+
+class TestJsonBackendUpdateAdd:
+    """Update detects new documents."""
+
+    async def test_add_document(self, tmp_path: str) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument
+
+        # Start with one document
+        kb = KnowledgeBase()
+        doc1 = KnowledgeDocument(document_id="d1", title="Doc 1", content="Hello world.")
+        from app.rag.models import KnowledgeChunk
+        kb.register(KnowledgeDocument(
+            document_id="d1", title="Doc 1", content="Hello world.",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="Hello world.", index=0),),
+        ))
+
+        backend = JsonPersistenceBackend(config=PersistenceConfig(overwrite=True))
+        await backend.save(tmp_path, kb)
+
+        # Add a second document
+        kb2 = KnowledgeBase()
+        kb2.register(KnowledgeDocument(
+            document_id="d1", title="Doc 1", content="Hello world.",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="Hello world.", index=0),),
+        ))
+        kb2.register(KnowledgeDocument(
+            document_id="d2", title="Doc 2", content="Second document.",
+            chunks=(KnowledgeChunk(chunk_id="d2:0", document_id="d2", content="Second document.", index=0),),
+        ))
+
+        result = await backend.update(tmp_path, kb2)
+        assert result.success is True
+        assert result.metadata["changes"]["added_documents"] == 1
+        assert result.metadata["changes"]["removed_documents"] == 0
+        assert result.metadata["changes"]["updated_documents"] == 0
+        assert result.metadata["documents"] == 2
+
+    async def test_add_document_loadable(self, tmp_path: str) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+
+        kb = KnowledgeBase()
+        kb.register(KnowledgeDocument(
+            document_id="a", title="A", content="Document A.",
+            chunks=(KnowledgeChunk(chunk_id="a:0", document_id="a", content="Document A.", index=0),),
+        ))
+        backend = JsonPersistenceBackend(config=PersistenceConfig(overwrite=True))
+        await backend.save(tmp_path, kb)
+
+        kb2 = KnowledgeBase()
+        kb2.register(KnowledgeDocument(
+            document_id="a", title="A", content="Document A.",
+            chunks=(KnowledgeChunk(chunk_id="a:0", document_id="a", content="Document A.", index=0),),
+        ))
+        kb2.register(KnowledgeDocument(
+            document_id="b", title="B", content="Document B.",
+            chunks=(KnowledgeChunk(chunk_id="b:0", document_id="b", content="Document B.", index=0),),
+        ))
+        await backend.update(tmp_path, kb2)
+
+        result = await backend.load(tmp_path)
+        kb3 = result.metadata["knowledge_base"]
+        assert kb3.count() == 2
+        assert kb3.get("b") is not None
+
+
+class TestJsonBackendUpdateRemove:
+    """Update detects removed documents."""
+
+    async def test_remove_document(self, tmp_path: str) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+
+        kb = KnowledgeBase()
+        kb.register(KnowledgeDocument(
+            document_id="d1", title="Doc 1", content="Hello.",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="Hello.", index=0),),
+        ))
+        kb.register(KnowledgeDocument(
+            document_id="d2", title="Doc 2", content="World.",
+            chunks=(KnowledgeChunk(chunk_id="d2:0", document_id="d2", content="World.", index=0),),
+        ))
+
+        backend = JsonPersistenceBackend(config=PersistenceConfig(overwrite=True))
+        await backend.save(tmp_path, kb)
+
+        # Remove d2
+        kb2 = KnowledgeBase()
+        kb2.register(KnowledgeDocument(
+            document_id="d1", title="Doc 1", content="Hello.",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="Hello.", index=0),),
+        ))
+
+        result = await backend.update(tmp_path, kb2)
+        assert result.metadata["changes"]["removed_documents"] == 1
+        assert result.metadata["changes"]["added_documents"] == 0
+        assert result.metadata["documents"] == 1
+
+
+class TestJsonBackendUpdateModified:
+    """Update detects content changes."""
+
+    async def test_update_content(self, tmp_path: str) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+
+        kb = KnowledgeBase()
+        kb.register(KnowledgeDocument(
+            document_id="d1", title="Doc 1", content="Original content.",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="Original content.", index=0),),
+        ))
+
+        backend = JsonPersistenceBackend(config=PersistenceConfig(overwrite=True))
+        await backend.save(tmp_path, kb)
+
+        # Update the content
+        kb2 = KnowledgeBase()
+        kb2.register(KnowledgeDocument(
+            document_id="d1", title="Doc 1", content="Updated content.",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="Updated content.", index=0),),
+        ))
+
+        result = await backend.update(tmp_path, kb2)
+        assert result.metadata["changes"]["updated_documents"] == 1
+        assert result.metadata["changes"]["added_documents"] == 0
+        assert result.metadata["changes"]["removed_documents"] == 0
+
+    async def test_update_content_persisted(self, tmp_path: str) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+
+        kb = KnowledgeBase()
+        kb.register(KnowledgeDocument(
+            document_id="d1", title="Doc 1", content="Original.",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="Original.", index=0),),
+        ))
+
+        backend = JsonPersistenceBackend(config=PersistenceConfig(overwrite=True))
+        await backend.save(tmp_path, kb)
+
+        kb2 = KnowledgeBase()
+        kb2.register(KnowledgeDocument(
+            document_id="d1", title="Doc 1", content="Updated!",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="Updated!", index=0),),
+        ))
+        await backend.update(tmp_path, kb2)
+
+        result = await backend.load(tmp_path)
+        kb3 = result.metadata["knowledge_base"]
+        assert kb3.get("d1").content == "Updated!"
+
+    async def test_update_title(self, tmp_path: str) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+
+        kb = KnowledgeBase()
+        kb.register(KnowledgeDocument(
+            document_id="d1", title="Old Title", content="Same content.",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="Same content.", index=0),),
+        ))
+
+        backend = JsonPersistenceBackend(config=PersistenceConfig(overwrite=True))
+        await backend.save(tmp_path, kb)
+
+        kb2 = KnowledgeBase()
+        kb2.register(KnowledgeDocument(
+            document_id="d1", title="New Title", content="Same content.",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="Same content.", index=0),),
+        ))
+        result = await backend.update(tmp_path, kb2)
+        assert result.metadata["changes"]["updated_documents"] == 1
+
+
+class TestJsonBackendUpdateNoChanges:
+    """No-op update when nothing changed."""
+
+    async def test_no_changes(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(config=PersistenceConfig(overwrite=True))
+        await backend.save(tmp_path, populated_kb)
+
+        result = await backend.update(tmp_path, populated_kb)
+        assert result.metadata["changes"]["added_documents"] == 0
+        assert result.metadata["changes"]["updated_documents"] == 0
+        assert result.metadata["changes"]["removed_documents"] == 0
+        assert result.metadata["documents"] == 1
+
+
+class TestJsonBackendUpdateRepeated:
+    """Repeated updates preserve data and increment correctly."""
+
+    async def test_repeated_updates(self, tmp_path: str) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+
+        backend = JsonPersistenceBackend(config=PersistenceConfig(overwrite=True))
+
+        # Start empty
+        kb = KnowledgeBase()
+        await backend.update(tmp_path, kb)
+
+        # Add a document
+        kb2 = KnowledgeBase()
+        kb2.register(KnowledgeDocument(
+            document_id="d1", title="Doc 1", content="First.",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="First.", index=0),),
+        ))
+        r1 = await backend.update(tmp_path, kb2)
+        assert r1.metadata["changes"]["added_documents"] == 1
+
+        # Add another
+        kb3 = KnowledgeBase()
+        kb3.register(KnowledgeDocument(
+            document_id="d1", title="Doc 1", content="First.",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="First.", index=0),),
+        ))
+        kb3.register(KnowledgeDocument(
+            document_id="d2", title="Doc 2", content="Second.",
+            chunks=(KnowledgeChunk(chunk_id="d2:0", document_id="d2", content="Second.", index=0),),
+        ))
+        r2 = await backend.update(tmp_path, kb3)
+        assert r2.metadata["changes"]["added_documents"] == 1
+
+        # Remove one
+        kb4 = KnowledgeBase()
+        kb4.register(KnowledgeDocument(
+            document_id="d1", title="Doc 1", content="First.",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="First.", index=0),),
+        ))
+        r3 = await backend.update(tmp_path, kb4)
+        assert r3.metadata["changes"]["removed_documents"] == 1
+
+        # Final state
+        result = await backend.load(tmp_path)
+        assert result.metadata["knowledge_base"].count() == 1
+
+
+class TestJsonBackendUpdateUnicode:
+    """Update preserves unicode content."""
+
+    async def test_update_unicode(self, tmp_path: str) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+
+        kb = KnowledgeBase()
+        kb.register(KnowledgeDocument(
+            document_id="u1", title="Unicode", content="东京是日本的首都。",
+            chunks=(KnowledgeChunk(chunk_id="u1:0", document_id="u1", content="东京是日本的首都。", index=0),),
+        ))
+        backend = JsonPersistenceBackend(config=PersistenceConfig(overwrite=True))
+        await backend.save(tmp_path, kb)
+
+        # Add an unicode document via update
+        kb2 = KnowledgeBase()
+        kb2.register(KnowledgeDocument(
+            document_id="u1", title="Unicode", content="东京是日本的首都。",
+            chunks=(KnowledgeChunk(chunk_id="u1:0", document_id="u1", content="东京是日本的首都。", index=0),),
+        ))
+        kb2.register(KnowledgeDocument(
+            document_id="u2", title="日本語", content="日本語のテスト",
+            chunks=(KnowledgeChunk(chunk_id="u2:0", document_id="u2", content="日本語のテスト", index=0),),
+        ))
+        result = await backend.update(tmp_path, kb2)
+        assert result.metadata["changes"]["added_documents"] == 1
+
+        # Load and verify
+        r = await backend.load(tmp_path)
+        kb3 = r.metadata["knowledge_base"]
+        doc = kb3.get("u2")
+        assert doc is not None
+        assert "日本語" in doc.content
+
+
+class TestJsonBackendUpdateStats:
+    """Update returns correct statistics."""
+
+    async def test_update_stats(self, tmp_path: str) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+
+        kb = KnowledgeBase()
+        kb.register(KnowledgeDocument(
+            document_id="d1", title="Doc 1", content="Hello.",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="Hello.", index=0),),
+        ))
+
+        backend = JsonPersistenceBackend(config=PersistenceConfig(overwrite=True))
+        # First save, then update to get changes tracking
+        await backend.save(tmp_path, kb)
+        r = await backend.update(tmp_path, kb)
+        assert r.metadata["size_bytes"] > 0
+        assert "changes" in r.metadata
+        assert "added_documents" in r.metadata["changes"]
+        assert "updated_documents" in r.metadata["changes"]
+        assert "removed_documents" in r.metadata["changes"]
+
+
+class TestJsonBackendUpdateDeterministic:
+    """Update produces deterministic output."""
+
+    async def test_update_deterministic(self, tmp_path: str) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+        import json
+
+        kb = KnowledgeBase()
+        kb.register(KnowledgeDocument(
+            document_id="d1", title="Doc 1", content="Hello.",
+            chunks=(KnowledgeChunk(chunk_id="d1:0", document_id="d1", content="Hello.", index=0),),
+        ))
+
+        backend = JsonPersistenceBackend(config=PersistenceConfig(overwrite=True))
+        await backend.update(tmp_path, kb)
+        with open(tmp_path, encoding="utf-8") as f:
+            first = json.load(f)
+
+        # Update again — should produce same documents/chunks for unchanged data
+        await backend.update(tmp_path, kb)
+        with open(tmp_path, encoding="utf-8") as f:
+            second = json.load(f)
+
+        assert first["documents"] == second["documents"]
+        assert first["chunks"] == second["chunks"]

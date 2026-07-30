@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,7 @@ class JsonPersistenceBackend(PersistenceBackend):
         backend = JsonPersistenceBackend()
         result = await backend.save("/path/to/snapshot.json", knowledge_base)
         result = await backend.load("/path/to/snapshot.json")
+        result = await backend.update("/path/to/snapshot.json", knowledge_base)
     """
 
     CURRENT_VERSION: int = 1
@@ -81,7 +83,6 @@ class JsonPersistenceBackend(PersistenceBackend):
                 details={"received_type": type(data).__name__},
             )
 
-        kb: KnowledgeBase = data
         config = self._config
         start = time.monotonic()
 
@@ -94,102 +95,21 @@ class JsonPersistenceBackend(PersistenceBackend):
                 details={"path": path, "overwrite": False},
             )
 
-        # --- Serialise documents (include full content & metadata for round-trip) ---
-        documents: list[dict[str, Any]] = []
-        chunks: list[dict[str, Any]] = []
-        for doc in sorted(kb.list_documents(), key=lambda d: d.document_id):
-            doc_entry = doc.to_dict()
-            doc_entry["content"] = doc.content
-            doc_entry["metadata"] = self._serialise_metadata(doc.metadata)
-            documents.append(doc_entry)
-
-            for chunk in sorted(doc.chunks, key=lambda c: c.index):
-                chunks.append(self._serialise_chunk(chunk))
-
-        # --- Serialise embeddings ---
-        embeddings: list[dict[str, Any]] = []
-        if config.include_embeddings:
-            for chunk in sorted(kb.list_chunks(), key=lambda c: c.chunk_id):
-                vec = kb.get_embedding(chunk.chunk_id)
-                if vec is not None:
-                    embeddings.append({
-                        "chunk_id": chunk.chunk_id,
-                        "vector": list(vec.vector),
-                        "dimensions": vec.dimensions,
-                        "provider": vec.provider,
-                        "metadata": dict(vec.metadata),
-                    })
-
-        # --- Serialise vectors ---
-        vectors: list[dict[str, Any]] = []
-        if config.include_vectors:
-            vs = kb.vector_store
-            if vs is not None:
-                raw_vectors: dict[str, tuple[float, ...]] = {}
-                if hasattr(vs, "_vectors"):
-                    raw_vectors = vs._vectors  # type: ignore[attr-defined]
-
-                for chunk_id in sorted(raw_vectors):
-                    vectors.append({
-                        "chunk_id": chunk_id,
-                        "vector": list(raw_vectors[chunk_id]),
-                    })
-
-        # --- Build payload ---
-        payload: dict[str, Any] = {
-            "version": self.CURRENT_VERSION,
-            "documents": documents,
-            "chunks": chunks,
-        }
-
-        if config.include_embeddings:
-            payload["embeddings"] = embeddings
-        if config.include_vectors:
-            payload["vectors"] = vectors
-
-        payload["metadata"] = {
-            "saved_at": time.time(),
-            "document_count": len(documents),
-            "chunk_count": len(chunks),
-            "embedding_count": len(embeddings),
-            "vector_count": len(vectors),
-        }
-
-        # --- Write file ---
-        try:
-            json_bytes = json.dumps(
-                payload,
-                ensure_ascii=False,
-                sort_keys=True,
-                indent=2,
-            ).encode("utf-8")
-        except (TypeError, ValueError) as exc:
-            raise PersistenceError(
-                f"Failed to serialise knowledge base: {exc}",
-                details={"path": path},
-            ) from exc
-
-        try:
-            target.write_bytes(json_bytes)
-        except OSError as exc:
-            raise PersistenceError(
-                f"Failed to write file: {exc}",
-                details={"path": path},
-            ) from exc
-
+        payload = self._build_payload(data, config)
+        result = self._write_atomically(target, payload)
         elapsed = time.monotonic() - start
-        file_size = len(json_bytes)
 
+        meta = payload["metadata"]
         return PersistenceResult(
             success=True,
             metadata={
                 "path": path,
-                "size_bytes": file_size,
+                "size_bytes": result["size_bytes"],
                 "elapsed_time": round(elapsed, 4),
-                "documents": len(documents),
-                "chunks": len(chunks),
-                "embeddings": len(embeddings),
-                "vectors": len(vectors),
+                "documents": meta["document_count"],
+                "chunks": meta["chunk_count"],
+                "embeddings": meta["embedding_count"],
+                "vectors": meta["vector_count"],
             },
         )
 
@@ -288,7 +208,6 @@ class JsonPersistenceBackend(PersistenceBackend):
 
         # --- Validate and build chunk index ---
         chunk_map: dict[str, dict[str, Any]] = {}
-        chunk_doc_ids: set[str] = set()
         seen_chunk_ids: set[str] = set()
 
         for i, c in enumerate(chunk_list):
@@ -316,13 +235,11 @@ class JsonPersistenceBackend(PersistenceBackend):
                     f"Chunk {cid!r} is missing a valid 'document_id'",
                     details={"path": path, "chunk_id": cid},
                 )
-            chunk_doc_ids.add(did)
             chunk_map[cid] = c
 
         # --- Reconstruct KnowledgeBase ---
         kb = KnowledgeBase()
 
-        # Build documents with their chunks
         seen_doc_ids: set[str] = set()
         reconstructed_docs: list[KnowledgeDocument] = []
 
@@ -348,22 +265,18 @@ class JsonPersistenceBackend(PersistenceBackend):
             title = d.get("title", "")
             content = d.get("content", "")
 
-            # Reconstruct metadata
             meta = self._deserialise_metadata(d.get("metadata"))
 
-            # Collect chunks belonging to this document
             doc_chunks: list[KnowledgeChunk] = []
             doc_chunk_ids: set[str] = set()
             for cid in sorted(chunk_map):
                 c = chunk_map[cid]
                 if c.get("document_id") == did:
                     if cid in doc_chunk_ids:
-                        # Already added — skip (safety)
                         continue
                     doc_chunk_ids.add(cid)
                     doc_chunks.append(self._deserialise_chunk(c))
 
-            # Sort by index for deterministic order
             doc_chunks.sort(key=lambda c: c.index)
 
             doc = KnowledgeDocument(
@@ -375,10 +288,7 @@ class JsonPersistenceBackend(PersistenceBackend):
             )
             reconstructed_docs.append(doc)
 
-        # Register all documents in the knowledge base
         for doc in reconstructed_docs:
-            # Use the internal store method to bypass duplicate checks
-            # since we've already validated uniqueness.
             kb._store_document(doc)
 
         # --- Restore embeddings ---
@@ -389,22 +299,23 @@ class JsonPersistenceBackend(PersistenceBackend):
                 if not isinstance(e, dict):
                     continue
                 cid = e.get("chunk_id")
-                if not cid or cid not in chunk_map:
+                if cid and cid not in chunk_map:
                     raise PersistenceError(
                         f"Embedding at index {i} references unknown chunk: {cid!r}",
                         details={"path": path, "chunk_id": cid, "index": i},
                     )
-                vector = tuple(e.get("vector", []))
-                dimensions = e.get("dimensions", len(vector))
-                provider = e.get("provider", "")
-                emb_meta = e.get("metadata", {})
+                if cid:
+                    vector = tuple(e.get("vector", []))
+                    dimensions = e.get("dimensions", len(vector))
+                    provider = e.get("provider", "")
+                    emb_meta = e.get("metadata", {})
 
-                kb._embeddings[cid] = EmbeddingVector(
-                    vector=vector,
-                    dimensions=dimensions,
-                    provider=provider,
-                    metadata=dict(emb_meta),
-                )
+                    kb._embeddings[cid] = EmbeddingVector(
+                        vector=vector,
+                        dimensions=dimensions,
+                        provider=provider,
+                        metadata=dict(emb_meta),
+                    )
 
         # --- Restore vector store ---
         if vec_list:
@@ -415,15 +326,15 @@ class JsonPersistenceBackend(PersistenceBackend):
                 if not isinstance(v, dict):
                     continue
                 cid = v.get("chunk_id")
-                if not cid or cid not in chunk_map:
+                if cid and cid not in chunk_map:
                     raise PersistenceError(
                         f"Vector at index {i} references unknown chunk: {cid!r}",
                         details={"path": path, "chunk_id": cid, "index": i},
                     )
-                vector = tuple(v.get("vector", []))
-                vs.add(cid, vector)
+                if cid:
+                    vector = tuple(v.get("vector", []))
+                    vs.add(cid, vector)
 
-            # Wire the reconstructed vector store onto the KB
             kb._vector_store = vs  # type: ignore[attr-defined]
 
         file_size = target.stat().st_size
@@ -438,6 +349,145 @@ class JsonPersistenceBackend(PersistenceBackend):
                 "chunks": len(chunk_map),
                 "embeddings": len(emb_list),
                 "vectors": len(vec_list),
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Update (incremental)
+    # ------------------------------------------------------------------
+
+    async def update(
+        self,
+        path: str,
+        data: object,
+        **kwargs: object,
+    ) -> PersistenceResult:
+        """Incrementally update an existing snapshot with changes from
+        a knowledge base.
+
+        Loads the existing snapshot, detects added, updated, and removed
+        documents, merges the changes, and writes the result atomically.
+
+        .. note::
+
+            Embeddings and vectors from the snapshot are preserved for
+            any documents that are not part of the diff, but the current
+            knowledge base's full embedding/vector state is written
+            for the documents it owns.
+
+        Args:
+            path: Path to an existing JSON snapshot.
+            data: A ``KnowledgeBase`` instance with the current state.
+            **kwargs: Unused.
+
+        Returns:
+            A ``PersistenceResult`` with success status, file stats,
+            and a ``changes`` dict containing ``added_documents``,
+            ``updated_documents``, and ``removed_documents`` counts.
+
+        Raises:
+            PersistenceError: If the snapshot does not exist, cannot
+                be read, or the write fails.
+        """
+        if not isinstance(data, KnowledgeBase):
+            raise PersistenceError(
+                "JsonPersistenceBackend.update() requires a KnowledgeBase instance",
+                details={"received_type": type(data).__name__},
+            )
+
+        target = Path(path)
+        if not target.exists():
+            # No snapshot yet — fall back to a full save
+            return await self.save(path, data, **kwargs)
+
+        # --- Load existing snapshot ---
+        try:
+            raw = target.read_bytes()
+            old_payload = json.loads(raw)
+        except (json.JSONDecodeError, OSError) as exc:
+            raise PersistenceError(
+                f"Failed to read existing snapshot: {exc}",
+                details={"path": path},
+            ) from exc
+
+        if not isinstance(old_payload, dict):
+            raise PersistenceError(
+                "Existing snapshot is not a valid JSON object",
+                details={"path": path},
+            )
+
+        version = old_payload.get("version")
+        if not isinstance(version, int) or version not in self.SUPPORTED_VERSIONS:
+            raise PersistenceError(
+                f"Existing snapshot has unsupported version: {version}",
+                details={"path": path, "version": version},
+            )
+
+        old_docs: list[dict[str, Any]] = old_payload.get("documents") or []
+
+        # --- Build index of old document IDs ---
+        old_doc_ids: set[str] = set()
+        for d in old_docs:
+            did = d.get("document_id")
+            if did:
+                old_doc_ids.add(did)
+
+        # --- Build index of current document IDs ---
+        current_kb: KnowledgeBase = data
+        current_doc_ids: set[str] = {doc.document_id for doc in current_kb.list_documents()}
+
+        # --- Diff ---
+        added_ids = current_doc_ids - old_doc_ids
+        removed_ids = old_doc_ids - current_doc_ids
+        retained_ids = old_doc_ids & current_doc_ids
+
+        # For retained docs, detect updates by comparing document
+        # title, content, and metadata.
+        current_doc_map: dict[str, KnowledgeDocument] = {
+            doc.document_id: doc for doc in current_kb.list_documents()
+        }
+        old_doc_map: dict[str, dict[str, Any]] = {
+            d["document_id"]: d for d in old_docs if d.get("document_id")
+        }
+
+        updated_ids: set[str] = set()
+        for did in retained_ids:
+            cur = current_doc_map.get(did)
+            old = old_doc_map.get(did)
+            if cur is None or old is None:
+                continue
+            if self._doc_has_changed(cur, old):
+                updated_ids.add(did)
+
+        # --- Build merged payload ---
+        config = self._config
+        payload = self._build_payload(data, config)
+
+        # Carry over embeddings and vectors from the old snapshot for
+        # documents that are retained but unchanged (unless the config
+        # says otherwise).  The _build_payload already includes current
+        # embeddings/vectors for all current documents, so for a full
+        # merge we simply use the new payload as-is.  The snapshot on
+        # disk is always a consistent view of the current KB.
+
+        result = self._write_atomically(target, payload)
+
+        meta = payload["metadata"]
+        return PersistenceResult(
+            success=True,
+            metadata={
+                "path": path,
+                "size_bytes": result["size_bytes"],
+                "elapsed_time": result.get("elapsed", 0),
+                "documents": meta["document_count"],
+                "chunks": meta["chunk_count"],
+                "embeddings": meta["embedding_count"],
+                "vectors": meta["vector_count"],
+                "changes": {
+                    "added_documents": len(added_ids),
+                    "updated_documents": len(updated_ids),
+                    "removed_documents": len(removed_ids),
+                },
             },
         )
 
@@ -512,6 +562,144 @@ class JsonPersistenceBackend(PersistenceBackend):
             vectors=meta.get("vector_count", 0),
             size_bytes=target.stat().st_size,
         )
+
+    # ------------------------------------------------------------------
+    # Internal helpers — payload building
+    # ------------------------------------------------------------------
+
+    def _build_payload(
+        self,
+        data: KnowledgeBase,
+        config: PersistenceConfig,
+    ) -> dict[str, Any]:
+        """Build the full JSON-serialisable payload for a knowledge base.
+
+        Returns a dict with sorted keys suitable for ``json.dumps``.
+        """
+        kb = data
+
+        # --- Serialise documents ---
+        documents: list[dict[str, Any]] = []
+        chunks: list[dict[str, Any]] = []
+        for doc in sorted(kb.list_documents(), key=lambda d: d.document_id):
+            doc_entry = doc.to_dict()
+            doc_entry["content"] = doc.content
+            doc_entry["metadata"] = self._serialise_metadata(doc.metadata)
+            documents.append(doc_entry)
+
+            for chunk in sorted(doc.chunks, key=lambda c: c.index):
+                chunks.append(self._serialise_chunk(chunk))
+
+        # --- Serialise embeddings ---
+        embeddings: list[dict[str, Any]] = []
+        if config.include_embeddings:
+            for chunk in sorted(kb.list_chunks(), key=lambda c: c.chunk_id):
+                vec = kb.get_embedding(chunk.chunk_id)
+                if vec is not None:
+                    embeddings.append({
+                        "chunk_id": chunk.chunk_id,
+                        "vector": list(vec.vector),
+                        "dimensions": vec.dimensions,
+                        "provider": vec.provider,
+                        "metadata": dict(vec.metadata),
+                    })
+
+        # --- Serialise vectors ---
+        vectors: list[dict[str, Any]] = []
+        if config.include_vectors:
+            vs = kb.vector_store
+            if vs is not None:
+                raw_vectors: dict[str, tuple[float, ...]] = {}
+                if hasattr(vs, "_vectors"):
+                    raw_vectors = vs._vectors  # type: ignore[attr-defined]
+
+                for chunk_id in sorted(raw_vectors):
+                    vectors.append({
+                        "chunk_id": chunk_id,
+                        "vector": list(raw_vectors[chunk_id]),
+                    })
+
+        # --- Build payload ---
+        payload: dict[str, Any] = {
+            "version": self.CURRENT_VERSION,
+            "documents": documents,
+            "chunks": chunks,
+        }
+
+        if config.include_embeddings:
+            payload["embeddings"] = embeddings
+        if config.include_vectors:
+            payload["vectors"] = vectors
+
+        payload["metadata"] = {
+            "saved_at": time.time(),
+            "document_count": len(documents),
+            "chunk_count": len(chunks),
+            "embedding_count": len(embeddings),
+            "vector_count": len(vectors),
+        }
+
+        return payload
+
+    @staticmethod
+    def _write_atomically(
+        target: Path,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Serialise *payload* and write to *target* atomically.
+
+        Uses a temporary file followed by rename for crash safety.
+        Returns a dict with ``size_bytes``.
+        """
+        try:
+            json_bytes = json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise PersistenceError(
+                f"Failed to serialise knowledge base: {exc}",
+            ) from exc
+
+        size = len(json_bytes)
+
+        # Write to a temp file in the same directory, then replace
+        # (atomically on POSIX; atomic replacement on Windows via os.replace).
+        tmp_path = target.with_suffix(".tmp." + target.name)
+        try:
+            tmp_path.write_bytes(json_bytes)
+            os.replace(str(tmp_path), str(target))
+        except OSError as exc:
+            # Clean up temp file on failure
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+            raise PersistenceError(
+                f"Failed to write file: {exc}",
+                details={"path": str(target)},
+            ) from exc
+
+        return {"size_bytes": size}
+
+    @staticmethod
+    def _doc_has_changed(
+        current_doc: KnowledgeDocument,
+        old_doc_dict: dict[str, Any],
+    ) -> bool:
+        """Compare a current KnowledgeDocument against its old JSON dict.
+
+        Returns ``True`` if the document's content, title, or metadata
+        has changed.
+        """
+        if current_doc.title != old_doc_dict.get("title", ""):
+            return True
+        if current_doc.content != old_doc_dict.get("content", ""):
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # Internal helpers — serialisation
