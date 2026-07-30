@@ -21,6 +21,7 @@ from app.rag.models import KnowledgeChunk, KnowledgeDocument
 if TYPE_CHECKING:
     from app.rag.embeddings.base import EmbeddingProvider
     from app.rag.embeddings.models import EmbeddingVector
+    from app.rag.vectorstore.base import VectorStore
 
 
 class KnowledgeBase:
@@ -36,6 +37,8 @@ class KnowledgeBase:
 
     If an ``EmbeddingProvider`` is configured, embeddings are generated
     automatically for every chunk during ``add_document()``.
+    If a ``VectorStore`` is also configured, vectors are inserted into
+    it automatically.
 
     Usage::
 
@@ -50,12 +53,14 @@ class KnowledgeBase:
         self,
         chunking_config: ChunkingConfig | None = None,
         embedding_provider: EmbeddingProvider | None = None,
+        vector_store: VectorStore | None = None,
     ) -> None:
         self._documents: dict[str, KnowledgeDocument] = {}
         self._chunks: dict[str, KnowledgeChunk] = {}
         self._embeddings: dict[str, EmbeddingVector] = {}
         self._chunking_engine = ChunkingEngine(config=chunking_config)
         self._embedding_provider = embedding_provider
+        self._vector_store = vector_store
 
     # ------------------------------------------------------------------
     # Properties
@@ -70,6 +75,11 @@ class KnowledgeBase:
     def embedding_provider(self) -> EmbeddingProvider | None:
         """Return the embedding provider, or ``None`` if not configured."""
         return self._embedding_provider
+
+    @property
+    def vector_store(self) -> VectorStore | None:
+        """Return the vector store, or ``None`` if not configured."""
+        return self._vector_store
 
     # ------------------------------------------------------------------
     # Registration
@@ -111,6 +121,8 @@ class KnowledgeBase:
 
         If an ``EmbeddingProvider`` is configured on this knowledge base,
         embeddings are generated for every chunk automatically.
+        If a ``VectorStore`` is also configured, vectors are inserted
+        into it automatically.
 
         Args:
             document: The document to add.
@@ -141,7 +153,7 @@ class KnowledgeBase:
             metadata=document.metadata,
         )
 
-        # Step 2: embed (if a provider is configured)
+        # Step 2: embed + add to vector store
         if self._embedding_provider is not None and result.chunks:
             self._generate_embeddings(result.chunks)
 
@@ -162,10 +174,12 @@ class KnowledgeBase:
         if doc is None:
             return False
 
-        # Remove associated chunks and their embeddings
+        # Remove associated chunks, their embeddings, and vector-store entries
         for chunk in doc.chunks:
             self._chunks.pop(chunk.chunk_id, None)
             self._embeddings.pop(chunk.chunk_id, None)
+            if self._vector_store is not None:
+                self._vector_store.remove(chunk.chunk_id)
 
         return True
 
@@ -231,10 +245,12 @@ class KnowledgeBase:
         return len(self._documents)
 
     def clear(self) -> None:
-        """Remove all documents, chunks, and embeddings."""
+        """Remove all documents, chunks, embeddings, and vectors."""
         self._documents.clear()
         self._chunks.clear()
         self._embeddings.clear()
+        if self._vector_store is not None:
+            self._vector_store.clear()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -256,7 +272,8 @@ class KnowledgeBase:
         """Generate embeddings for a tuple of chunks using the configured provider.
 
         Chunks are embedded in batch for efficiency.  The resulting
-        vectors are stored keyed by chunk ID.
+        vectors are stored keyed by chunk ID and (if a vector store is
+        configured) inserted into it.
         """
         if self._embedding_provider is None or not chunks:
             return
@@ -265,7 +282,6 @@ class KnowledgeBase:
 
         texts = [chunk.content for chunk in chunks]
         try:
-            # Use asyncio.run() since add_document is synchronous
             result = asyncio.run(self._embedding_provider.embed_batch(texts))
         except Exception as exc:
             from app.rag.embeddings.errors import EmbeddingProviderError
@@ -276,3 +292,5 @@ class KnowledgeBase:
 
         for chunk, vec in zip(chunks, result.embeddings):
             self._embeddings[chunk.chunk_id] = vec
+            if self._vector_store is not None:
+                self._vector_store.add(chunk.chunk_id, vec.vector)
