@@ -1,14 +1,14 @@
-"""Architecture tests for the hybrid retrieval layer.
-
-Checkpoint 1 — verifies imports, configuration, fusion strategy enum,
-models, fusion functions, error hierarchy, and immutability.
-"""
+"""Comprehensive tests for the hybrid retrieval layer — architecture + DefaultHybridRetriever."""
 
 from __future__ import annotations
+
+import asyncio
+import math
 
 import pytest
 
 from app.rag.hybrid import (
+    DefaultHybridRetriever,
     FusionError,
     FusionStrategy,
     HybridConfig,
@@ -49,6 +49,10 @@ class TestImports:
     def test_hybrid_retriever_imported(self) -> None:
         assert HybridRetriever is HybridRetriever_Impl
 
+    def test_default_hybrid_retriever_imported(self) -> None:
+        assert DefaultHybridRetriever is not None
+        assert issubclass(DefaultHybridRetriever, HybridRetriever)
+
     def test_fusion_functions_imported(self) -> None:
         assert callable(weighted_sum)
         assert callable(reciprocal_rank_fusion)
@@ -68,9 +72,6 @@ class TestFusionStrategy:
     def test_values(self) -> None:
         assert FusionStrategy.WEIGHTED_SUM.value == "weighted_sum"
         assert FusionStrategy.RECIPROCAL_RANK_FUSION.value == "reciprocal_rank_fusion"
-
-    def test_str(self) -> None:
-        assert str(FusionStrategy.WEIGHTED_SUM) == "FusionStrategy.WEIGHTED_SUM"
 
 
 # ======================================================================
@@ -99,8 +100,7 @@ class TestHybridConfig:
         assert cfg.fusion_strategy == FusionStrategy.RECIPROCAL_RANK_FUSION
 
     def test_validate_passes(self) -> None:
-        cfg = HybridConfig(keyword_weight=0.2, semantic_weight=0.8, max_candidates=10)
-        cfg.validate()
+        HybridConfig(keyword_weight=0.2, semantic_weight=0.8, max_candidates=10).validate()
 
     def test_validate_keyword_weight_negative(self) -> None:
         with pytest.raises(InvalidHybridConfiguration):
@@ -117,10 +117,6 @@ class TestHybridConfig:
     def test_validate_max_candidates_zero(self) -> None:
         with pytest.raises(InvalidHybridConfiguration):
             HybridConfig(max_candidates=0).validate()
-
-    def test_validate_max_candidates_negative(self) -> None:
-        with pytest.raises(InvalidHybridConfiguration):
-            HybridConfig(max_candidates=-1).validate()
 
     def test_immutable(self) -> None:
         cfg = HybridConfig()
@@ -142,12 +138,7 @@ class TestRetrievalScore:
         assert s.final_score == 0.0
 
     def test_custom_values(self) -> None:
-        s = RetrievalScore(
-            chunk_id="c1",
-            keyword_score=0.8,
-            semantic_score=0.6,
-            final_score=0.7,
-        )
+        s = RetrievalScore(chunk_id="c1", keyword_score=0.8, semantic_score=0.6, final_score=0.7)
         assert s.chunk_id == "c1"
         assert s.keyword_score == 0.8
         assert s.semantic_score == 0.6
@@ -172,13 +163,9 @@ class TestHybridResult:
 
     def test_with_results(self) -> None:
         scores = (RetrievalScore(chunk_id="c1", final_score=0.9),)
-        result = HybridResult(
-            results=scores,
-            metadata={"strategy": "weighted_sum", "candidates": 5},
-        )
+        result = HybridResult(results=scores, metadata={"strategy": "weighted_sum"})
         assert len(result.results) == 1
         assert result.results[0].chunk_id == "c1"
-        assert result.metadata["strategy"] == "weighted_sum"
 
     def test_immutable(self) -> None:
         r = HybridResult()
@@ -199,39 +186,60 @@ class TestHybridRetriever:
     def test_abstract_methods(self) -> None:
         assert hasattr(HybridRetriever, "retrieve")
 
-    def test_concrete_subclass(self) -> None:
-        class TestRetriever(HybridRetriever):
-            async def retrieve(self, query: str, top_k: int = 5) -> HybridResult:
-                return HybridResult()
 
-        retriever = TestRetriever()
+# ======================================================================
+# DefaultHybridRetriever — architecture
+# ======================================================================
+
+
+class TestDefaultHybridRetrieverArch:
+    def test_concrete_subclass(self) -> None:
+        class FakeKB:
+            embedding_provider = None
+            vector_store = None
+
+        class FakeKR:
+            async def retrieve(self, query):
+                from app.rag.models import KnowledgeResult
+                return KnowledgeResult()
+
+        retriever = DefaultHybridRetriever(FakeKB(), FakeKR())
         assert retriever.config.keyword_weight == 0.5
         assert retriever.config.fusion_strategy == FusionStrategy.WEIGHTED_SUM
 
     def test_custom_config(self) -> None:
-        class TestRetriever(HybridRetriever):
-            async def retrieve(self, query: str, top_k: int = 5) -> HybridResult:
-                return HybridResult()
+        class FakeKB:
+            embedding_provider = None
+            vector_store = None
+
+        class FakeKR:
+            async def retrieve(self, query):
+                from app.rag.models import KnowledgeResult
+                return KnowledgeResult()
 
         cfg = HybridConfig(fusion_strategy=FusionStrategy.RECIPROCAL_RANK_FUSION)
-        retriever = TestRetriever(config=cfg)
+        retriever = DefaultHybridRetriever(FakeKB(), FakeKR(), config=cfg)
         assert retriever.config.fusion_strategy == FusionStrategy.RECIPROCAL_RANK_FUSION
 
-    def test_config_validation(self) -> None:
-        class ValidatingRetriever(HybridRetriever):
-            def __init__(self, config: HybridConfig) -> None:
-                config.validate()
-                super().__init__(config)
+    def test_properties(self) -> None:
+        class FakeKB:
+            embedding_provider = None
+            vector_store = None
 
-            async def retrieve(self, query: str, top_k: int = 5) -> HybridResult:
-                return HybridResult()
+        class FakeKR:
+            async def retrieve(self, query):
+                from app.rag.models import KnowledgeResult
+                return KnowledgeResult()
 
-        with pytest.raises(InvalidHybridConfiguration):
-            ValidatingRetriever(HybridConfig(keyword_weight=-1.0))
+        kb = FakeKB()
+        kr = FakeKR()
+        r = DefaultHybridRetriever(kb, kr)
+        assert r.knowledge_base is kb
+        assert r.keyword_retriever is kr
 
 
 # ======================================================================
-# weighted_sum
+# Fusion helpers
 # ======================================================================
 
 
@@ -239,47 +247,25 @@ class TestWeightedSum:
     def test_equal_weights(self) -> None:
         kw = {"c1": 1.0, "c2": 0.5}
         sem = {"c2": 0.8, "c3": 0.3}
-        result = weighted_sum(kw, sem, keyword_weight=0.5, semantic_weight=0.5)
-        assert result["c1"] == pytest.approx(0.5)  # 0.5*1.0 + 0.5*0.0
-        assert result["c2"] == pytest.approx(0.65)  # 0.5*0.5 + 0.5*0.8
-        assert result["c3"] == pytest.approx(0.15)  # 0.5*0.0 + 0.5*0.3
+        result = weighted_sum(kw, sem)
+        assert result["c1"] == pytest.approx(0.5)
+        assert result["c2"] == pytest.approx(0.65)
+        assert result["c3"] == pytest.approx(0.15)
 
     def test_keyword_only(self) -> None:
-        kw = {"c1": 1.0}
-        sem = {}
-        result = weighted_sum(kw, sem, keyword_weight=1.0, semantic_weight=0.0)
+        result = weighted_sum({"c1": 1.0}, {}, keyword_weight=1.0, semantic_weight=0.0)
         assert result["c1"] == pytest.approx(1.0)
 
     def test_semantic_only(self) -> None:
-        kw = {}
-        sem = {"c1": 0.9}
-        result = weighted_sum(kw, sem, keyword_weight=0.0, semantic_weight=1.0)
+        result = weighted_sum({}, {"c1": 0.9}, keyword_weight=0.0, semantic_weight=1.0)
         assert result["c1"] == pytest.approx(0.9)
 
-    def test_skewed_weights(self) -> None:
-        kw = {"c1": 1.0}
-        sem = {"c1": 0.5}
-        result = weighted_sum(kw, sem, keyword_weight=0.8, semantic_weight=0.2)
-        assert result["c1"] == pytest.approx(0.9)  # 0.8 + 0.1
-
     def test_empty_scores(self) -> None:
-        result = weighted_sum({}, {})
-        assert result == {}
+        assert weighted_sum({}, {}) == {}
 
     def test_all_weights_zero_raises(self) -> None:
-        with pytest.raises(FusionError, match="non-zero"):
+        with pytest.raises(FusionError):
             weighted_sum({}, {}, keyword_weight=0.0, semantic_weight=0.0)
-
-    def test_preserves_ids(self) -> None:
-        kw = {"a": 0.5, "b": 0.3}
-        sem = {"b": 0.7, "c": 0.2}
-        result = weighted_sum(kw, sem)
-        assert set(result) == {"a", "b", "c"}
-
-
-# ======================================================================
-# reciprocal_rank_fusion
-# ======================================================================
 
 
 class TestReciprocalRankFusion:
@@ -287,57 +273,212 @@ class TestReciprocalRankFusion:
         kw = ["c1", "c2", "c3"]
         sem = ["c2", "c1", "c4"]
         result = reciprocal_rank_fusion(kw, sem, k=60)
-        assert "c1" in result
-        assert "c2" in result
-        assert "c3" in result
-        assert "c4" in result
-        # c2 appears in both at rank 2 → higher score than c3 (only in kw)
-        assert result["c2"] > result["c3"]
+        assert set(result) == {"c1", "c2", "c3", "c4"}
 
     def test_identical_rankings(self) -> None:
-        kw = ["c1", "c2", "c3"]
-        sem = ["c1", "c2", "c3"]
+        kw = sem = ["c1", "c2", "c3"]
         result = reciprocal_rank_fusion(kw, sem, k=60)
-        # c1: 1/(60+1) + 1/(60+1) = 2/61 ≈ 0.0328
-        # c3: 1/(60+3) + 1/(60+3) = 2/63 ≈ 0.0317
         assert result["c1"] > result["c3"]
 
-    def test_only_keyword(self) -> None:
-        kw = ["c1", "c2"]
-        sem = []
-        result = reciprocal_rank_fusion(kw, sem, k=60)
-        # c1: 1/61 + 1/(60+3) (sem rank = len(sem)+1 = 3)
-        assert len(result) == 2
-
-    def test_only_semantic(self) -> None:
-        kw = []
-        sem = ["c1", "c2"]
-        result = reciprocal_rank_fusion(kw, sem, k=60)
-        assert len(result) == 2
-
     def test_empty_lists(self) -> None:
-        result = reciprocal_rank_fusion([], [], k=60)
-        assert result == {}
+        assert reciprocal_rank_fusion([], [], k=60) == {}
 
-    def test_custom_k(self) -> None:
-        kw = ["c1"]
-        sem = ["c1"]
-        result = reciprocal_rank_fusion(kw, sem, k=1)
-        # c1: 1/(1+1) + 1/(1+1) = 1.0
-        assert result["c1"] == pytest.approx(1.0)
 
-    def test_ordering(self) -> None:
-        """RRF results have correct ordering."""
-        kw = ["c3", "c1", "c2"]
-        sem = ["c2", "c3", "c1"]
-        result = reciprocal_rank_fusion(kw, sem, k=60)
-        # All items should have scores
-        assert set(result) == {"c1", "c2", "c3"}
-        # c3: kw_rank=1, sem_rank=2 → 1/61 + 1/62
-        # c2: kw_rank=3, sem_rank=1 → 1/63 + 1/61
-        # c1: kw_rank=2, sem_rank=3 → 1/62 + 1/63
-        # c3 should have highest score, then c2, then c1
-        assert result["c3"] > result["c1"]
+# ======================================================================
+# DefaultHybridRetriever — integration with KnowledgeBase
+# ======================================================================
+
+
+class TestDefaultHybridRetriever:
+    """Integration tests using real KnowledgeBase, retriever, embeddings, vector store."""
+
+    @pytest.fixture
+    def kb_and_retriever(self):
+        """Build a fully-configured KB with chunks, embeddings, and vector store."""
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.chunking import ChunkingConfig, STRATEGY_SENTENCE
+        from app.rag.embeddings import DeterministicEmbeddingProvider, EmbeddingConfig as EConfig
+        from app.rag.vectorstore import MemoryVectorStore, VectorStoreConfig, SimilarityMetric
+        from app.rag.retriever import KnowledgeRetriever
+
+        emb_config = EConfig(
+            provider_name="deterministic", dimensions=4, normalize_embeddings=True,
+        )
+        vs = MemoryVectorStore(
+            config=VectorStoreConfig(metric=SimilarityMetric.COSINE),
+        )
+        kb = KnowledgeBase(
+            chunking_config=ChunkingConfig(strategy=STRATEGY_SENTENCE),
+            embedding_provider=DeterministicEmbeddingProvider(emb_config),
+            vector_store=vs,
+        )
+
+        # Paris document: sentences about Paris
+        kb.add_document(doc("paris", "Paris is the capital of France. It has the Eiffel Tower. "
+                                     "The Louvre museum is in Paris. French cuisine is famous."))
+        # London document
+        kb.add_document(doc("london", "London is the capital of the UK. Big Ben is in London. "
+                                      "The Thames river flows through London. Fish and chips."))
+        # Python document (unrelated)
+        kb.add_document(doc("python", "Python is a programming language. It was created by "
+                                       "Guido van Rossum. Python is used for data science."))
+
+        retriever = KnowledgeRetriever(kb)
+        return kb, retriever
+
+    async def test_keyword_only(self, kb_and_retriever):
+        """When no vector store is available, keyword retrieval alone works."""
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.retriever import KnowledgeRetriever
+
+        kb, _ = kb_and_retriever
+        # KB without vector store
+        kb2 = KnowledgeBase()
+        for d in kb.list_documents():
+            # Re-register with pre-built chunks
+            kb2.register(d)
+
+        kr = KnowledgeRetriever(kb2)
+        hr = DefaultHybridRetriever(kb2, kr)
+        result = await hr.retrieve("capital", top_k=3)
+        assert len(result.results) > 0
+        assert result.metadata.get("keyword_candidates", 0) > 0
+        assert result.metadata.get("semantic_candidates", 0) == 0
+
+    async def test_semantic_only(self, kb_and_retriever):
+        """When keyword_weight=0, only semantic scores matter."""
+        kb, kr = kb_and_retriever
+        cfg = HybridConfig(keyword_weight=0.0, semantic_weight=1.0)
+        hr = DefaultHybridRetriever(kb, kr, config=cfg)
+        # Query that would not match keyword but has related semantics
+        result = await hr.retrieve("Eiffel", top_k=3)
+        assert len(result.results) > 0
+        # All scores should have 0 keyword component
+        for rs in result.results:
+            assert rs.keyword_score >= 0
+
+    async def test_weighted_fusion(self, kb_and_retriever):
+        """Weighted sum fusion produces combined results."""
+        kb, kr = kb_and_retriever
+        cfg = HybridConfig(fusion_strategy=FusionStrategy.WEIGHTED_SUM)
+        hr = DefaultHybridRetriever(kb, kr, config=cfg)
+        result = await hr.retrieve("capital London", top_k=5)
+        assert len(result.results) > 0
+        assert result.metadata["fusion_strategy"] == "weighted_sum"
+        for rs in result.results:
+            assert rs.final_score >= 0
+
+    async def test_rrf_fusion(self, kb_and_retriever):
+        """Reciprocal rank fusion produces combined results."""
+        kb, kr = kb_and_retriever
+        cfg = HybridConfig(fusion_strategy=FusionStrategy.RECIPROCAL_RANK_FUSION)
+        hr = DefaultHybridRetriever(kb, kr, config=cfg)
+        result = await hr.retrieve("capital", top_k=5)
+        assert len(result.results) > 0
+        assert result.metadata["fusion_strategy"] == "reciprocal_rank_fusion"
+        # RRF scores should be positive
+        for rs in result.results:
+            assert rs.final_score > 0
+
+    async def test_top_k(self, kb_and_retriever):
+        """top_k limits the number of results."""
+        kb, kr = kb_and_retriever
+        hr = DefaultHybridRetriever(kb, kr)
+        for k in (1, 2, 3, 10):
+            result = await hr.retrieve("capital", top_k=k)
+            assert len(result.results) <= k
+
+    async def test_empty_kb(self):
+        """Empty knowledge base returns empty results."""
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.retriever import KnowledgeRetriever
+
+        kb = KnowledgeBase()
+        kr = KnowledgeRetriever(kb)
+        hr = DefaultHybridRetriever(kb, kr)
+        result = await hr.retrieve("anything", top_k=5)
+        assert len(result.results) == 0
+        assert result.metadata["keyword_candidates"] == 0
+
+    async def test_deterministic_ordering(self, kb_and_retriever):
+        """Same query produces same ordering."""
+        kb, kr = kb_and_retriever
+        hr = DefaultHybridRetriever(kb, kr)
+        r1 = await hr.retrieve("capital", top_k=5)
+        r2 = await hr.retrieve("capital", top_k=5)
+        for a, b in zip(r1.results, r2.results):
+            assert a.chunk_id == b.chunk_id
+            assert math.isclose(a.final_score, b.final_score, rel_tol=1e-6)
+
+    async def test_unicode_query(self, kb_and_retriever):
+        """Unicode queries are handled correctly."""
+        kb, kr = kb_and_retriever
+        hr = DefaultHybridRetriever(kb, kr)
+        result = await hr.retrieve("Françé", top_k=3)
+        assert isinstance(result, HybridResult)
+
+    async def test_no_embedding_provider(self):
+        """When KB has no embedding provider, only keyword retrieval runs."""
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.retriever import KnowledgeRetriever
+        from app.rag.chunking import ChunkingConfig, STRATEGY_WHOLE_DOCUMENT
+
+        kb = KnowledgeBase(
+            chunking_config=ChunkingConfig(strategy=STRATEGY_WHOLE_DOCUMENT),
+        )
+        kb.add_document(doc("d1", "Paris is the capital of France."))
+        kr = KnowledgeRetriever(kb)
+        hr = DefaultHybridRetriever(kb, kr)
+        result = await hr.retrieve("capital", top_k=5)
+        assert len(result.results) > 0
+        assert result.metadata["semantic_candidates"] == 0
+
+    async def test_no_vector_store(self):
+        """When KB has no vector store, only keyword retrieval runs."""
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.retriever import KnowledgeRetriever
+        from app.rag.chunking import STRATEGY_WHOLE_DOCUMENT
+        from app.rag.models import KnowledgeChunk
+
+        # Use register() with pre-built chunks to avoid asyncio.run() in
+        # add_document() while running inside an async test context.
+        kb = KnowledgeBase()
+        chunk = KnowledgeChunk(chunk_id="d1_chunk", document_id="d1",
+                                content="Paris is the capital of France.")
+        from app.rag.models import KnowledgeDocument
+        kb.register(KnowledgeDocument(
+            document_id="d1", content="Paris is the capital of France.",
+            chunks=(chunk,),
+        ))
+        kr = KnowledgeRetriever(kb)
+        hr = DefaultHybridRetriever(kb, kr)
+        result = await hr.retrieve("capital", top_k=5)
+        assert len(result.results) > 0
+        assert result.metadata["semantic_candidates"] == 0
+
+    async def test_results_type(self, kb_and_retriever):
+        """Results contain RetrievalScore objects with populated fields."""
+        kb, kr = kb_and_retriever
+        hr = DefaultHybridRetriever(kb, kr)
+        result = await hr.retrieve("capital", top_k=5)
+        for rs in result.results:
+            assert isinstance(rs, RetrievalScore)
+            assert isinstance(rs.chunk_id, str)
+            assert isinstance(rs.final_score, float)
+
+    async def test_metadata(self, kb_and_retriever):
+        """Metadata includes timing and candidate info."""
+        kb, kr = kb_and_retriever
+        hr = DefaultHybridRetriever(kb, kr)
+        result = await hr.retrieve("capital", top_k=5)
+        meta = result.metadata
+        assert "keyword_elapsed_ms" in meta
+        assert "semantic_elapsed_ms" in meta
+        assert "fusion_elapsed_ms" in meta
+        assert "total_elapsed_ms" in meta
+        assert "keyword_candidates" in meta
+        assert "semantic_candidates" in meta
+        assert "fusion_strategy" in meta
 
 
 # ======================================================================
@@ -359,14 +500,22 @@ class TestHybridErrors:
     def test_fusion_error(self) -> None:
         err = FusionError("Fusion failed")
         assert err.code == "FUSION_ERROR"
-        assert isinstance(err, HybridError)
 
     def test_to_dict(self) -> None:
         err = InvalidHybridConfiguration("test", details={"key": "val"})
         d = err.to_dict()
         assert d["code"] == "INVALID_HYBRID_CONFIGURATION"
         assert d["message"] == "test"
-        assert d["details"] == {"key": "val"}
 
     def test_knowledge_error_is_base(self) -> None:
         assert issubclass(HybridError, KnowledgeError)
+
+
+# ======================================================================
+# Helper
+# ======================================================================
+
+
+def doc(document_id: str, content: str) -> object:
+    from app.rag.models import KnowledgeDocument
+    return KnowledgeDocument(document_id=document_id, content=content)

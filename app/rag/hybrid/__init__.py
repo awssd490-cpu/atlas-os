@@ -17,8 +17,10 @@ from app.rag.hybrid.errors import (
 )
 from app.rag.hybrid.fusion import FusionStrategy, reciprocal_rank_fusion, weighted_sum
 from app.rag.hybrid.models import HybridResult, RetrievalScore
+from app.rag.hybrid.retriever import DefaultHybridRetriever
 
 __all__ = [
+    "DefaultHybridRetriever",
     "FusionError",
     "FusionStrategy",
     "HybridConfig",
