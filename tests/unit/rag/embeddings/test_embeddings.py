@@ -521,6 +521,27 @@ class TestDeterministicProvider:
         v2 = (await provider.embed(text)).embeddings[0].vector
         assert v1 == v2
 
+    async def test_empty_batch(self, provider: DeterministicEmbeddingProvider) -> None:
+        result = await provider.embed_batch([])
+        assert result.total_texts == 0
+        assert result.embeddings == ()
+
+    async def test_normalization_zero_vector(self) -> None:
+        """L2-normalizing a zero vector returns it unchanged (no division by zero)."""
+        config = EmbeddingConfig(
+            provider_name="det",
+            dimensions=4,
+            normalize_embeddings=True,
+        )
+        p = DeterministicEmbeddingProvider(config)
+        # All-zero input would only happen with an empty string and specific
+        # hash to exactly 0 — improbable but we test the static method directly
+        from app.rag.embeddings.providers.deterministic import (
+            DeterministicEmbeddingProvider as DEP,
+        )
+        result = DEP._l2_normalize((0.0, 0.0, 0.0))
+        assert result == (0.0, 0.0, 0.0)
+
     async def test_elapsed_time(self, provider: DeterministicEmbeddingProvider) -> None:
         result = await provider.embed("test")
         assert result.elapsed_ms >= 0
@@ -623,6 +644,22 @@ class TestMockProvider:
         result = await provider.embed("hello")
         assert result.embeddings[0].provider == "mock"
         assert result.embeddings[0].metadata.get("text_length") == 5
+
+    async def test_empty_batch(self, provider: MockEmbeddingProvider) -> None:
+        result = await provider.embed_batch([])
+        assert result.total_texts == 0
+        assert result.embeddings == ()
+
+    async def test_embed_with_normalize_config(self) -> None:
+        """Mock provider works with any normalize_embeddings setting."""
+        config = EmbeddingConfig(
+            provider_name="mock_norm",
+            dimensions=3,
+            normalize_embeddings=True,
+        )
+        p = MockEmbeddingProvider(config)
+        result = await p.embed("test")
+        assert len(result.embeddings[0].vector) == 3
 
     async def test_elapsed_time(self, provider: MockEmbeddingProvider) -> None:
         result = await provider.embed("test")

@@ -10,11 +10,10 @@ knowledge.  It supports thousands of documents with efficient lookups.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from app.rag.chunking import ChunkingConfig, ChunkingEngine
 from app.rag.errors import (
-    DocumentNotFoundError,
     DuplicateDocumentError,
 )
 from app.rag.models import KnowledgeChunk, KnowledgeDocument
@@ -263,7 +262,6 @@ class KnowledgeBase:
             return
 
         import asyncio
-        import time
 
         texts = [chunk.content for chunk in chunks]
         try:
