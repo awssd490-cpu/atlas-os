@@ -537,6 +537,42 @@ class TestSentence:
         assert result.chunks[0].chunk_id == "sentence:d1:0"
         assert result.chunks[1].chunk_id == "sentence:d1:1"
 
+    def test_character_positions_correct_with_delimiter(self) -> None:
+        """character_start/character_end must account for consumed delimiter."""
+        engine = ChunkingEngine()
+        config = ChunkingConfig(strategy=STRATEGY_SENTENCE)
+        # "A." starts at 0, "B." starts at 3 after the space delimiter
+        text = "A. B."
+        result = engine.chunk(text, config=config)
+        assert result.metadata[0].character_start == 0
+        assert result.metadata[0].character_end == 2
+        assert result.metadata[1].character_start == 3
+        assert result.metadata[1].character_end == 5
+
+    def test_character_positions_multiple_spaces(self) -> None:
+        engine = ChunkingEngine()
+        config = ChunkingConfig(strategy=STRATEGY_SENTENCE)
+        text = "A.   B.   C."
+        result = engine.chunk(text, config=config)
+        assert result.metadata[0].character_start == 0
+        assert result.metadata[0].character_end == 2
+        assert result.metadata[1].character_start == 5
+        assert result.metadata[1].character_end == 7
+        assert result.metadata[2].character_start == 10
+        assert result.metadata[2].character_end == 12
+
+    def test_sentence_slice_match(self) -> None:
+        """Every chunk content must match the slice of the original text."""
+        engine = ChunkingEngine()
+        config = ChunkingConfig(strategy=STRATEGY_SENTENCE)
+        text = "Hello world. How are you? I'm fine!"
+        result = engine.chunk(text, config=config)
+        for chunk, meta in zip(result.chunks, result.metadata):
+            expected = text[meta.character_start:meta.character_end]
+            assert chunk.content == expected, (
+                f"Content mismatch: {chunk.content!r} != {expected!r}"
+            )
+
 
 # ======================================================================
 # Paragraph strategy
@@ -609,6 +645,29 @@ class TestParagraph:
         result = engine.chunk("A.\n\nB.", config=config, document_id="d1")
         assert result.chunks[0].chunk_id == "paragraph:d1:0"
         assert result.chunks[1].chunk_id == "paragraph:d1:1"
+
+    def test_character_positions_variable_delimiter(self) -> None:
+        """Blank-line delimiter can vary — positions must still be correct."""
+        engine = ChunkingEngine()
+        config = ChunkingConfig(strategy=STRATEGY_PARAGRAPH)
+        text = "P1.\n\n\n\n\nP2."
+        result = engine.chunk(text, config=config)
+        assert result.metadata[0].character_start == 0
+        assert result.metadata[0].character_end == 3
+        assert result.metadata[1].character_start == 8
+        assert result.metadata[1].character_end == 11
+
+    def test_paragraph_slice_match(self) -> None:
+        """Every chunk content must match the slice of the original text."""
+        engine = ChunkingEngine()
+        config = ChunkingConfig(strategy=STRATEGY_PARAGRAPH)
+        text = "First.\n\n\nSecond.\n\n\n\nThird."
+        result = engine.chunk(text, config=config)
+        for chunk, meta in zip(result.chunks, result.metadata):
+            expected = text[meta.character_start:meta.character_end]
+            assert chunk.content == expected, (
+                f"Content mismatch: {chunk.content!r} != {expected!r}"
+            )
 
 
 # ======================================================================
@@ -850,6 +909,40 @@ class TestEdgeCases:
         text = "line1\nline2\nline3"
         result = engine.chunk(text, config=config)
         assert result.metadata[0].line_count == 3
+
+    def test_fixed_size_slice_match(self) -> None:
+        """Every fixed_size chunk content matches the original text slice."""
+        engine = ChunkingEngine()
+        config = ChunkingConfig(
+            strategy=STRATEGY_FIXED_SIZE,
+            chunk_size=10,
+            chunk_overlap=3,
+            min_chunk_size=1,
+        )
+        text = "0123456789ABCDEFGHIJ"
+        result = engine.chunk(text, config=config)
+        for chunk, meta in zip(result.chunks, result.metadata):
+            expected = text[meta.character_start:meta.character_end]
+            assert chunk.content == expected.strip(), (
+                f"Slice mismatch: {chunk.content!r} != {expected!r}"
+            )
+
+    def test_sliding_window_slice_match(self) -> None:
+        """Every sliding_window chunk content matches the original text slice."""
+        engine = ChunkingEngine()
+        config = ChunkingConfig(
+            strategy=STRATEGY_SLIDING_WINDOW,
+            window_size=10,
+            stride=5,
+            min_chunk_size=1,
+        )
+        text = "0123456789ABCDEFGHIJ"  # 20 chars
+        result = engine.chunk(text, config=config)
+        for chunk, meta in zip(result.chunks, result.metadata):
+            expected = text[meta.character_start:meta.character_end]
+            assert chunk.content == expected.strip(), (
+                f"Slice mismatch: {chunk.content!r} != {expected!r}"
+            )
 
 
 # ======================================================================

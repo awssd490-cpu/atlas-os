@@ -229,23 +229,29 @@ def _sentence_strategy(text: str, config: ChunkingConfig) -> ChunkResult:
     chunks: list[KnowledgeChunk] = []
     metadatas: list[ChunkMetadata] = []
     index = 0
-    char_offset = 0
+    search_pos = 0
 
     for part in raw_parts:
         if not part:
             continue
         content = _apply_strip(part, config)
         if not content:
-            char_offset += len(part)
             continue
 
-        start = char_offset
-        end = char_offset + len(part)
+        # Locate this part in the original text starting from search_pos.
+        # The regex delimiter may have consumed variable-length whitespace,
+        # so we use find() rather than tracking a running offset.
+        start = text.find(part, search_pos)
+        if start < 0:
+            # Fallback for pathological case — should not happen
+            start = search_pos
+        end = start + len(part)
+
         meta = _make_metadata(text, start, end, index, config)
         chunks.append(KnowledgeChunk(content=content, index=index, metadata=meta))
         metadatas.append(meta)
         index += 1
-        char_offset = end
+        search_pos = end
 
     return ChunkResult(
         chunks=tuple(chunks),
@@ -277,40 +283,28 @@ def _paragraph_strategy(text: str, config: ChunkingConfig) -> ChunkResult:
     chunks: list[KnowledgeChunk] = []
     metadatas: list[ChunkMetadata] = []
     index = 0
-    char_offset = 0
+    search_pos = 0
 
     for part in raw_parts:
         if not part:
             continue
         content = _apply_strip(part, config)
         if not content:
-            char_offset += len(part)
             continue
 
-        start = char_offset
-        end = char_offset + len(part)
+        # Locate this part in the original text.  The blank-line delimiter
+        # can vary in length (``\n\n``, ``\n \n``, ``\n\n\n``, etc.), so
+        # we locate it with find() rather than a running offset.
+        start = text.find(part, search_pos)
+        if start < 0:
+            start = search_pos
+        end = start + len(part)
+
         meta = _make_metadata(text, start, end, index, config)
         chunks.append(KnowledgeChunk(content=content, index=index, metadata=meta))
         metadatas.append(meta)
         index += 1
-        char_offset = end + 1  # +1 for the split delimiter
-
-        # Advance char_offset past any additional blank lines
-        # We need to find the next non-empty position in the original text
-        scan_pos = end
-        while scan_pos < original_length and text[scan_pos:scan_pos + 1] == "\n":
-            scan_pos += 1
-        # The next part starts at scan_pos, but char_offset should point
-        # to where the *next content* starts in the original text.
-        # Since we split on \n\s*\n, the delimiter length varies.
-        # Find where the original text continues after the delimiter.
-        remaining = text[end:]
-        match = _PARAGRAPH_PATTERN.match(remaining)
-        if match:
-            char_offset = end + len(match.group())
-        else:
-            # No more splits — this was the last paragraph
-            pass
+        search_pos = end
 
     return ChunkResult(
         chunks=tuple(chunks),
