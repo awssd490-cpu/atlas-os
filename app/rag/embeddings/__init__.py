@@ -17,6 +17,7 @@ from app.rag.embeddings.errors import (
     UnsupportedEmbeddingProvider,
 )
 from app.rag.embeddings.models import EmbeddingResult, EmbeddingVector
+from app.rag.embeddings.providers import DeterministicEmbeddingProvider, MockEmbeddingProvider
 from app.rag.embeddings.registry import (
     clear_providers,
     get_provider,
@@ -25,6 +26,7 @@ from app.rag.embeddings.registry import (
 )
 
 __all__ = [
+    "DeterministicEmbeddingProvider",
     "EmbeddingConfig",
     "EmbeddingError",
     "EmbeddingProvider",
@@ -32,6 +34,7 @@ __all__ = [
     "EmbeddingResult",
     "EmbeddingVector",
     "InvalidEmbeddingConfiguration",
+    "MockEmbeddingProvider",
     "UnsupportedEmbeddingProvider",
     "clear_providers",
     "get_provider",

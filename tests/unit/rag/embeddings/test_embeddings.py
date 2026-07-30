@@ -1,14 +1,17 @@
-"""Architecture tests for the embedding layer.
+"""Architecture and provider tests for the embedding layer.
 
-Checkpoint 1 — verifies imports, configuration, provider interface,
-registry, model construction, error hierarchy, and immutability.
+Checkpoint 1 — imports, config, provider interface, registry, models, errors.
+Checkpoint 2 — deterministic and mock provider implementations.
 """
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.rag.embeddings import (
+    DeterministicEmbeddingProvider,
     EmbeddingConfig,
     EmbeddingError,
     EmbeddingProvider,
@@ -16,6 +19,7 @@ from app.rag.embeddings import (
     EmbeddingResult,
     EmbeddingVector,
     InvalidEmbeddingConfiguration,
+    MockEmbeddingProvider,
     UnsupportedEmbeddingProvider,
     clear_providers,
     get_provider,
@@ -52,6 +56,14 @@ class TestImports:
 
     def test_embedding_vector_imported(self) -> None:
         assert EmbeddingVector is EmbeddingVector_Impl
+
+    def test_deterministic_provider_imported(self) -> None:
+        assert DeterministicEmbeddingProvider is not None
+        assert issubclass(DeterministicEmbeddingProvider, EmbeddingProvider)
+
+    def test_mock_provider_imported(self) -> None:
+        assert MockEmbeddingProvider is not None
+        assert issubclass(MockEmbeddingProvider, EmbeddingProvider)
 
     def test_error_hierarchy(self) -> None:
         assert issubclass(EmbeddingError, KnowledgeError)
@@ -101,7 +113,7 @@ class TestEmbeddingConfig:
 
     def test_validate_passes(self) -> None:
         cfg = EmbeddingConfig(dimensions=384, batch_size=10, timeout=5.0)
-        cfg.validate()  # should not raise
+        cfg.validate()
 
     def test_validate_dimensions_zero(self) -> None:
         with pytest.raises(InvalidEmbeddingConfiguration):
@@ -254,7 +266,6 @@ class TestEmbeddingProvider:
         cfg = EmbeddingConfig(dimensions=128)
         provider = TestProvider(cfg)
         assert provider.config.dimensions == 128
-        # Config should be immutable
         with pytest.raises(AttributeError):
             provider.config.dimensions = 256  # type: ignore[misc]
 
@@ -291,7 +302,6 @@ class TestEmbeddingProvider:
             async def embed_batch(self, texts: list[str]) -> EmbeddingResult:  # type: ignore[override]
                 return EmbeddingResult()
 
-        import asyncio
         provider = AsyncProvider(EmbeddingConfig())
         result = asyncio.run(provider.embed("hello"))
         assert isinstance(result, EmbeddingResult)
@@ -318,7 +328,9 @@ class TestEmbeddingRegistry:
         register_provider("fake", FakeProvider)
         cls = get_provider("fake")
         assert cls is FakeProvider
-        clear_providers()
+        # Clean up this test's registration
+        from app.rag.embeddings.registry import _providers
+        _providers.pop("fake", None)
 
     def test_get_unknown_raises(self) -> None:
         with pytest.raises(UnsupportedEmbeddingProvider):
@@ -353,7 +365,20 @@ class TestEmbeddingRegistry:
         with pytest.raises(ValueError, match="already registered"):
             register_provider("dup", P2)
 
-    def test_list_providers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_list_providers_includes_builtins(self) -> None:
+        """Built-in providers are auto-registered."""
+        names = list_providers()
+        assert "deterministic" in names
+        assert "mock" in names
+
+    def test_get_builtin_providers(self) -> None:
+        """Built-in providers can be looked up."""
+        deterministic_cls = get_provider("deterministic")
+        mock_cls = get_provider("mock")
+        assert deterministic_cls is DeterministicEmbeddingProvider
+        assert mock_cls is MockEmbeddingProvider
+
+    def test_list_providers_isolation(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("app.rag.embeddings.registry._providers", {})
 
         class P(EmbeddingProvider):
@@ -390,6 +415,218 @@ class TestEmbeddingRegistry:
         assert list_providers() == ["p"]
         clear_providers()
         assert list_providers() == []
+
+
+# ======================================================================
+# DeterministicEmbeddingProvider
+# ======================================================================
+
+
+class TestDeterministicProvider:
+    @pytest.fixture
+    def provider(self) -> DeterministicEmbeddingProvider:
+        config = EmbeddingConfig(
+            provider_name="deterministic",
+            dimensions=4,
+            normalize_embeddings=False,
+        )
+        return DeterministicEmbeddingProvider(config)
+
+    @pytest.fixture
+    def normalized_provider(self) -> DeterministicEmbeddingProvider:
+        config = EmbeddingConfig(
+            provider_name="deterministic",
+            dimensions=4,
+            normalize_embeddings=True,
+        )
+        return DeterministicEmbeddingProvider(config)
+
+    async def test_name(self, provider: DeterministicEmbeddingProvider) -> None:
+        assert provider.name == "deterministic"
+
+    async def test_embed_returns_result(self, provider: DeterministicEmbeddingProvider) -> None:
+        result = await provider.embed("hello")
+        assert isinstance(result, EmbeddingResult)
+        assert result.total_texts == 1
+        assert len(result.embeddings) == 1
+
+    async def test_same_input_same_vector(self, provider: DeterministicEmbeddingProvider) -> None:
+        v1 = (await provider.embed("hello")).embeddings[0].vector
+        v2 = (await provider.embed("hello")).embeddings[0].vector
+        assert v1 == v2
+
+    async def test_different_input_different_vector(self, provider: DeterministicEmbeddingProvider) -> None:
+        v1 = (await provider.embed("hello")).embeddings[0].vector
+        v2 = (await provider.embed("world")).embeddings[0].vector
+        assert v1 != v2
+
+    async def test_respects_dimensions(self, provider: DeterministicEmbeddingProvider) -> None:
+        result = await provider.embed("test")
+        assert len(result.embeddings[0].vector) == 4
+
+    async def test_custom_dimensions(self) -> None:
+        config = EmbeddingConfig(provider_name="det", dimensions=8, normalize_embeddings=False)
+        p = DeterministicEmbeddingProvider(config)
+        result = await p.embed("test")
+        assert len(result.embeddings[0].vector) == 8
+
+    async def test_normalization(self, normalized_provider: DeterministicEmbeddingProvider) -> None:
+        """Normalized vectors have L2 norm ≈ 1.0."""
+        result = await normalized_provider.embed("test")
+        vec = result.embeddings[0].vector
+        norm = sum(v * v for v in vec) ** 0.5
+        assert abs(norm - 1.0) < 1e-9
+
+    async def test_non_normalized(self, provider: DeterministicEmbeddingProvider) -> None:
+        """Non-normalized vectors can have any norm."""
+        result = await provider.embed("test")
+        vec = result.embeddings[0].vector
+        norm = sum(v * v for v in vec) ** 0.5
+        # Raw SHA-256 based vectors map to [-1, 1], so norm could be > 1
+        assert norm != 0.0
+
+    async def test_batch_embeddings(self, provider: DeterministicEmbeddingProvider) -> None:
+        texts = ["hello", "world", "test"]
+        result = await provider.embed_batch(texts)
+        assert result.total_texts == 3
+        assert len(result.embeddings) == 3
+        assert result.embeddings[0].vector != result.embeddings[1].vector
+
+    async def test_batch_preserves_order(self, provider: DeterministicEmbeddingProvider) -> None:
+        texts = ["first", "second", "third"]
+        result = await provider.embed_batch(texts)
+        for i, text in enumerate(texts):
+            single = await provider.embed(text)
+            assert result.embeddings[i].vector == single.embeddings[0].vector
+
+    async def test_empty_string(self, provider: DeterministicEmbeddingProvider) -> None:
+        result = await provider.embed("")
+        assert result.total_texts == 1
+        assert len(result.embeddings[0].vector) == 4
+
+    async def test_unicode(self, provider: DeterministicEmbeddingProvider) -> None:
+        result = await provider.embed("Hello 世界! 🌍✨")
+        assert result.total_texts == 1
+        assert len(result.embeddings[0].vector) == 4
+
+    async def test_long_text(self, provider: DeterministicEmbeddingProvider) -> None:
+        text = "A" * 10000
+        result = await provider.embed(text)
+        assert result.total_texts == 1
+
+    async def test_unicode_deterministic(self, provider: DeterministicEmbeddingProvider) -> None:
+        """Unicode texts produce the same vector across calls."""
+        text = "你好世界"
+        v1 = (await provider.embed(text)).embeddings[0].vector
+        v2 = (await provider.embed(text)).embeddings[0].vector
+        assert v1 == v2
+
+    async def test_elapsed_time(self, provider: DeterministicEmbeddingProvider) -> None:
+        result = await provider.embed("test")
+        assert result.elapsed_ms >= 0
+
+    async def test_metadata(self, provider: DeterministicEmbeddingProvider) -> None:
+        result = await provider.embed("hello")
+        assert result.embeddings[0].provider == "deterministic"
+        assert result.embeddings[0].metadata.get("text_length") == 5
+
+
+# ======================================================================
+# MockEmbeddingProvider
+# ======================================================================
+
+
+class TestMockProvider:
+    @pytest.fixture
+    def provider(self) -> MockEmbeddingProvider:
+        config = EmbeddingConfig(
+            provider_name="mock",
+            dimensions=4,
+        )
+        return MockEmbeddingProvider(config)
+
+    async def test_name(self, provider: MockEmbeddingProvider) -> None:
+        assert provider.name == "mock"
+
+    async def test_default_zero_vector(self, provider: MockEmbeddingProvider) -> None:
+        result = await provider.embed("hello")
+        vec = result.embeddings[0].vector
+        assert all(v == 0.0 for v in vec)
+
+    async def test_default_vector_dimensions(self, provider: MockEmbeddingProvider) -> None:
+        result = await provider.embed("hello")
+        assert len(result.embeddings[0].vector) == 4
+
+    async def test_custom_vector_factory(self) -> None:
+        def factory(text: str) -> tuple[float, ...]:
+            return (1.0, 2.0, 3.0)
+
+        config = EmbeddingConfig(provider_name="mock_custom", dimensions=3)
+        p = MockEmbeddingProvider(config, vector_factory=factory)
+        result = await p.embed("hello")
+        assert result.embeddings[0].vector == (1.0, 2.0, 3.0)
+
+    async def test_text_based_vector_factory(self) -> None:
+        """Factory can use the input text."""
+        def factory(text: str) -> tuple[float, ...]:
+            length = len(text)
+            return tuple(float(length) for _ in range(2))
+
+        config = EmbeddingConfig(provider_name="mock_text", dimensions=2)
+        p = MockEmbeddingProvider(config, vector_factory=factory)
+        result = await p.embed("hello")
+        assert result.embeddings[0].vector == (5.0, 5.0)
+
+    async def test_failure_injection(self) -> None:
+        def fail(text: str) -> bool:
+            return "fail" in text.lower()
+
+        config = EmbeddingConfig(provider_name="mock_fail", dimensions=4)
+        p = MockEmbeddingProvider(config, fail_on=fail)
+
+        result = await p.embed("ok")
+        assert result.total_texts == 1
+
+        with pytest.raises(EmbeddingProviderError, match="fail"):
+            await p.embed("fail me")
+
+    async def test_batch_embeddings(self, provider: MockEmbeddingProvider) -> None:
+        texts = ["a", "b", "c"]
+        result = await provider.embed_batch(texts)
+        assert result.total_texts == 3
+        assert len(result.embeddings) == 3
+
+    async def test_batch_preserves_order(self, provider: MockEmbeddingProvider) -> None:
+        texts = ["first", "second", "third"]
+        result = await provider.embed_batch(texts)
+        for i, text in enumerate(texts):
+            single = await provider.embed(text)
+            assert result.embeddings[i].vector == single.embeddings[0].vector
+
+    async def test_batch_failure(self) -> None:
+        config = EmbeddingConfig(provider_name="mock_bf", dimensions=2)
+        p = MockEmbeddingProvider(config, fail_on=lambda t: t == "bad")
+
+        with pytest.raises(EmbeddingProviderError):
+            await p.embed_batch(["good", "bad", "good"])
+
+    async def test_empty_string(self, provider: MockEmbeddingProvider) -> None:
+        result = await provider.embed("")
+        assert result.total_texts == 1
+        assert len(result.embeddings[0].vector) == 4
+
+    async def test_unicode(self, provider: MockEmbeddingProvider) -> None:
+        result = await provider.embed("Hello 世界!")
+        assert result.total_texts == 1
+
+    async def test_metadata(self, provider: MockEmbeddingProvider) -> None:
+        result = await provider.embed("hello")
+        assert result.embeddings[0].provider == "mock"
+        assert result.embeddings[0].metadata.get("text_length") == 5
+
+    async def test_elapsed_time(self, provider: MockEmbeddingProvider) -> None:
+        result = await provider.embed("test")
+        assert result.elapsed_ms >= 0
 
 
 # ======================================================================
