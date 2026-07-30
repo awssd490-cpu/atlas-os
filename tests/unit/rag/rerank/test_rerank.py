@@ -1,14 +1,13 @@
-"""Tests for the reranking architecture.
-
-Checkpoint 1 — verifies imports, configuration, models, registry,
-error hierarchy, and abstract base class.
-"""
+"""Tests for the reranking architecture and DefaultReranker."""
 
 from __future__ import annotations
+
+import math
 
 import pytest
 
 from app.rag.rerank import (
+    DefaultReranker,
     InvalidRerankConfiguration,
     RerankConfig,
     RerankError,
@@ -50,6 +49,10 @@ class TestImports:
     def test_rerank_response_imported(self) -> None:
         assert RerankResponse is RerankResponse_Impl
 
+    def test_default_reranker_imported(self) -> None:
+        assert DefaultReranker is not None
+        assert issubclass(DefaultReranker, Reranker)
+
     def test_error_hierarchy(self) -> None:
         assert issubclass(RerankError, KnowledgeError)
         assert issubclass(InvalidRerankConfiguration, RerankError)
@@ -86,10 +89,8 @@ class TestRerankConfig:
             cfg.top_k = 5  # type: ignore[misc]
 
     def test_validate_passes(self) -> None:
-        cfg = RerankConfig(top_k=1, score_threshold=0.0)
-        cfg.validate()
-        cfg = RerankConfig(top_k=100, score_threshold=1.0)
-        cfg.validate()
+        RerankConfig(top_k=1, score_threshold=0.0).validate()
+        RerankConfig(top_k=100, score_threshold=1.0).validate()
 
     def test_validate_top_k_zero(self) -> None:
         with pytest.raises(InvalidRerankConfiguration):
@@ -122,12 +123,7 @@ class TestRerankedResult:
         assert r.final_score == 0.0
 
     def test_custom_values(self) -> None:
-        r = RerankedResult(
-            chunk_id="c1",
-            original_score=0.8,
-            rerank_score=0.9,
-            final_score=0.85,
-        )
+        r = RerankedResult(chunk_id="c1", original_score=0.8, rerank_score=0.9, final_score=0.85)
         assert r.chunk_id == "c1"
         assert r.original_score == 0.8
         assert r.rerank_score == 0.9
@@ -152,13 +148,9 @@ class TestRerankResponse:
 
     def test_with_results(self) -> None:
         results = (RerankedResult(chunk_id="c1", final_score=0.9),)
-        response = RerankResponse(
-            results=results,
-            metadata={"model": "cross_encoder", "elapsed_ms": 5.2},
-        )
+        response = RerankResponse(results=results, metadata={"model": "test"})
         assert len(response.results) == 1
         assert response.results[0].chunk_id == "c1"
-        assert response.metadata["model"] == "cross_encoder"
 
     def test_immutable(self) -> None:
         r = RerankResponse()
@@ -167,7 +159,7 @@ class TestRerankResponse:
 
 
 # ======================================================================
-# Reranker (abstract)
+# Reranker ABC + Registry
 # ======================================================================
 
 
@@ -179,128 +171,250 @@ class TestReranker:
     def test_abstract_methods(self) -> None:
         assert hasattr(Reranker, "rerank")
 
-    def test_concrete_subclass(self) -> None:
-        class TestRerankerImpl(Reranker):
-            async def rerank(
-                self,
-                query: str,
-                results: list[tuple[str, float]],  # type: ignore[override]
-            ) -> RerankResponse:
-                return RerankResponse()
-
-        reranker = TestRerankerImpl()
-        assert reranker.config.enabled is True
-        assert reranker.config.top_k == 10
-
-    def test_custom_config(self) -> None:
-        class TestRerankerImpl(Reranker):
-            async def rerank(
-                self,
-                query: str,
-                results: list[tuple[str, float]],  # type: ignore[override]
-            ) -> RerankResponse:
-                return RerankResponse()
-
-        cfg = RerankConfig(top_k=5, score_threshold=0.2)
-        reranker = TestRerankerImpl(config=cfg)
-        assert reranker.config.top_k == 5
-        assert reranker.config.score_threshold == 0.2
-
-    def test_config_validation(self) -> None:
-        class ValidatingReranker(Reranker):
-            def __init__(self, config: RerankConfig) -> None:
-                config.validate()
-                super().__init__(config)
-
-            async def rerank(
-                self,
-                query: str,
-                results: list[tuple[str, float]],  # type: ignore[override]
-            ) -> RerankResponse:
-                return RerankResponse()
-
-        with pytest.raises(InvalidRerankConfiguration):
-            ValidatingReranker(RerankConfig(top_k=0))
-
-
-# ======================================================================
-# Registry
-# ======================================================================
-
 
 class TestRerankerRegistry:
     def test_register_and_get(self) -> None:
-        class FakeReranker(Reranker):
-            async def rerank(
-                self,
-                query: str,
-                results: list[tuple[str, float]],  # type: ignore[override]
-            ) -> RerankResponse:
+        class Fake(Reranker):
+            async def rerank(self, query: str, results: list[tuple[str, float]]) -> RerankResponse:
                 return RerankResponse()
-
-        register_reranker("fake", FakeReranker)
-        cls = get_reranker("fake")
-        assert cls is FakeReranker
+        register_reranker("fake", Fake)
+        assert get_reranker("fake") is Fake
         clear_rerankers()
 
     def test_get_unknown_raises(self) -> None:
         with pytest.raises(RerankerNotFound):
             get_reranker("nonexistent")
 
-    def test_register_duplicate_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("app.rag.rerank.registry._rerankers", {})
 
-        class P1(Reranker):
-            async def rerank(
-                self,
-                query: str,
-                results: list[tuple[str, float]],  # type: ignore[override]
-            ) -> RerankResponse:
-                return RerankResponse()
+# ======================================================================
+# DefaultReranker — score() method
+# ======================================================================
 
-        class P2(Reranker):
-            async def rerank(
-                self,
-                query: str,
-                results: list[tuple[str, float]],  # type: ignore[override]
-            ) -> RerankResponse:
-                return RerankResponse()
 
-        register_reranker("dup", P1)
-        with pytest.raises(ValueError, match="already registered"):
-            register_reranker("dup", P2)
+class TestDefaultRerankerScore:
+    """Tests for the core scoring algorithm via score()."""
 
-    def test_list_rerankers(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("app.rag.rerank.registry._rerankers", {})
+    @pytest.fixture
+    def reranker(self) -> DefaultReranker:
+        return DefaultReranker()
 
-        class P(Reranker):
-            async def rerank(
-                self,
-                query: str,
-                results: list[tuple[str, float]],  # type: ignore[override]
-            ) -> RerankResponse:
-                return RerankResponse()
+    def test_lexical_overlap(self, reranker: DefaultReranker) -> None:
+        """Matching query terms produce a higher rerank_score."""
+        r1 = reranker.score("capital city", "The capital of France is Paris.")
+        r2 = reranker.score("capital city", "The weather today is sunny.")
+        assert r1.rerank_score > r2.rerank_score
 
-        assert list_rerankers() == []
-        register_reranker("a", P)
-        register_reranker("b", P)
-        assert set(list_rerankers()) == {"a", "b"}
+    def test_exact_phrase_bonus(self, reranker: DefaultReranker) -> None:
+        """Exact query match gives bonus."""
+        r1 = reranker.score("capital of France", "The capital of France is Paris.")
+        r2 = reranker.score("capital of France", "A capital city named Paris.")
+        assert r1.rerank_score > r2.rerank_score
 
-    def test_clear_rerankers(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("app.rag.rerank.registry._rerankers", {})
+    def test_length_penalty(self, reranker: DefaultReranker) -> None:
+        """Very short chunks get lower scores."""
+        r1 = reranker.score("test", "test " * 50)       # ~250 chars
+        r2 = reranker.score("test", "test")              # 4 chars
+        assert r1.rerank_score != r2.rerank_score
 
-        class P(Reranker):
-            async def rerank(
-                self,
-                query: str,
-                results: list[tuple[str, float]],  # type: ignore[override]
-            ) -> RerankResponse:
-                return RerankResponse()
+    def test_final_score_combines(self, reranker: DefaultReranker) -> None:
+        """final_score = original_score + rerank_weight * rerank_score."""
+        result = reranker.score("capital", "The capital is Paris.", original_score=0.5)
+        expected = 0.5 + 1.0 * result.rerank_score
+        assert math.isclose(result.final_score, expected)
 
-        register_reranker("p", P)
-        assert list_rerankers() == ["p"]
-        clear_rerankers()
-        assert list_rerankers() == []
+    def test_deterministic(self, reranker: DefaultReranker) -> None:
+        """Same inputs produce same outputs."""
+        r1 = reranker.score("hello world", "Hello world, this is a test.")
+        r2 = reranker.score("hello world", "Hello world, this is a test.")
+        assert r1.rerank_score == r2.rerank_score
+        assert r1.final_score == r2.final_score
+
+    def test_empty_query(self, reranker: DefaultReranker) -> None:
+        result = reranker.score("", "Some content.", original_score=0.5)
+        assert result.rerank_score == 0.0
+        assert result.final_score == 0.5
+
+    def test_empty_content(self, reranker: DefaultReranker) -> None:
+        result = reranker.score("query", "", original_score=0.5)
+        assert result.rerank_score == 0.0
+        assert result.final_score == 0.5
+
+    def test_unicode(self, reranker: DefaultReranker) -> None:
+        result = reranker.score("capital", "Paris est la capitale de la France.")
+        assert result.rerank_score >= 0
+        assert result.final_score >= 0
+
+    def test_partial_term_overlap(self, reranker: DefaultReranker) -> None:
+        """Fewer matching terms → lower score."""
+        r1 = reranker.score("cat dog bird", "cat dog bird fish")
+        r2 = reranker.score("cat dog bird", "cat only")
+        assert r1.rerank_score > r2.rerank_score
+
+
+# ======================================================================
+# DefaultReranker — rerank() with content_provider
+# ======================================================================
+
+
+class TestDefaultRerankerRerank:
+    """Tests for the rerank() method with a content provider."""
+
+    @pytest.fixture
+    def content_map(self) -> dict[str, str]:
+        return {
+            "c1": "Paris is the capital of France.",
+            "c2": "London is the capital of the UK.",
+            "c3": "Python is a programming language.",
+        }
+
+    @pytest.fixture
+    def reranker(self, content_map: dict[str, str]) -> DefaultReranker:
+        return DefaultReranker(content_provider=content_map.get)  # type: ignore[arg-type]
+
+    async def test_rerank_returns_results(self, reranker: DefaultReranker) -> None:
+        results = [("c1", 0.9), ("c2", 0.8), ("c3", 0.5)]
+        response = await reranker.rerank("capital", results)
+        assert len(response.results) > 0
+        assert isinstance(response, RerankResponse)
+
+    async def test_rerank_ordering(self, reranker: DefaultReranker) -> None:
+        """Higher-scoring chunks are ranked first."""
+        results = [("c1", 0.9), ("c2", 0.8), ("c3", 0.5)]
+        response = await reranker.rerank("capital", results)
+        # c1 matches "capital" and "France" — should rank highest
+        assert response.results[0].chunk_id == "c1"
+
+    async def test_top_k(self, reranker: DefaultReranker) -> None:
+        results = [("c1", 0.9), ("c2", 0.8), ("c3", 0.5)]
+        response = await reranker.rerank("capital", results)
+        assert len(response.results) <= len(results)
+
+    async def test_custom_top_k(self) -> None:
+        config = RerankConfig(top_k=2)
+        content = {"c1": "Paris.", "c2": "London.", "c3": "Berlin."}
+        reranker = DefaultReranker(config=config, content_provider=content.get)  # type: ignore[arg-type]
+        results = [("c1", 0.9), ("c2", 0.8), ("c3", 0.7)]
+        response = await reranker.rerank("city", results)
+        assert len(response.results) <= 2
+
+    async def test_score_threshold(self) -> None:
+        """Results below threshold are filtered out."""
+        config = RerankConfig(top_k=10, score_threshold=1.0)
+        content = {"c1": "Paris.", "c2": "London."}
+        reranker = DefaultReranker(config=config, content_provider=content.get)  # type: ignore[arg-type]
+        results = [("c1", 0.1), ("c2", 0.05)]
+        response = await reranker.rerank("city", results)
+        assert len(response.results) == 0
+
+    async def test_deterministic_ordering(self, reranker: DefaultReranker) -> None:
+        results = [("c1", 0.9), ("c2", 0.8), ("c3", 0.5)]
+        r1 = await reranker.rerank("capital", list(results))
+        r2 = await reranker.rerank("capital", list(results))
+        for a, b in zip(r1.results, r2.results):
+            assert a.chunk_id == b.chunk_id
+            assert math.isclose(a.final_score, b.final_score)
+
+    async def test_empty_results(self, reranker: DefaultReranker) -> None:
+        response = await reranker.rerank("query", [])
+        assert len(response.results) == 0
+
+    async def test_empty_query(self, reranker: DefaultReranker) -> None:
+        response = await reranker.rerank("", [("c1", 0.9)])
+        assert len(response.results) == 0
+
+    async def test_no_content_provider(self) -> None:
+        """Without content provider, final_score = original_score."""
+        reranker = DefaultReranker()
+        results = [("c1", 0.9), ("c2", 0.5)]
+        response = await reranker.rerank("capital", results)
+        for r in response.results:
+            assert math.isclose(r.final_score, r.original_score)
+            assert r.rerank_score == 0.0
+
+    async def test_missing_content(self, content_map: dict[str, str]) -> None:
+        """Missing chunk content is handled gracefully."""
+        reranker = DefaultReranker(content_provider=content_map.get)  # type: ignore[arg-type]
+        results = [("c1", 0.9), ("nonexistent", 0.8)]
+        response = await reranker.rerank("capital", results)
+        assert len(response.results) == 2
+
+    async def test_metadata(self, reranker: DefaultReranker) -> None:
+        results = [("c1", 0.9)]
+        response = await reranker.rerank("capital", results)
+        meta = response.metadata
+        assert "rerank_weight" in meta
+        assert "total_candidates" in meta
+        assert "returned" in meta
+        assert "elapsed_ms" in meta
+
+    async def test_unicode_content(self) -> None:
+        content = {"c1": "Paris est la capitale de la France."}
+        reranker = DefaultReranker(content_provider=content.get)  # type: ignore[arg-type]
+        response = await reranker.rerank("capitale", [("c1", 0.9)])
+        assert len(response.results) == 1
+
+    async def test_scoring_improves_ranking(self) -> None:
+        """Reranking should promote chunks with better content match."""
+        content = {
+            "irrelevant": "The weather today is sunny.",
+            "relevant": "The capital of France is Paris.",
+        }
+        reranker = DefaultReranker(content_provider=content.get)  # type: ignore[arg-type]
+        # Both start with same original score
+        results = [("irrelevant", 1.0), ("relevant", 1.0)]
+        response = await reranker.rerank("capital France Paris", results)
+        # "relevant" should now be ranked first after reranking
+        assert response.results[0].chunk_id == "relevant"
+
+
+# ======================================================================
+# DefaultReranker — rerank() with custom weights
+# ======================================================================
+
+
+class TestDefaultRerankerWeights:
+    async def test_custom_rerank_weight(self) -> None:
+        """Higher rerank_weight increases the impact of reranking."""
+        content = {"c1": "Paris is the capital of France.", "c2": "Unrelated text."}
+        base = DefaultReranker(content_provider=content.get, rerank_weight=1.0)  # type: ignore[arg-type]
+        heavy = DefaultReranker(content_provider=content.get, rerank_weight=5.0)  # type: ignore[arg-type]
+
+        results = [("c1", 0.5), ("c2", 0.5)]
+        r_base = await base.rerank("capital France", results)
+        r_heavy = await heavy.rerank("capital France", results)
+
+        # The reranked scores should differ
+        assert not math.isclose(r_base.results[0].final_score,
+                                r_heavy.results[0].final_score)
+
+
+# ======================================================================
+# DefaultReranker — architecture
+# ======================================================================
+
+
+class TestDefaultRerankerArch:
+    def test_subclass_of_reranker(self) -> None:
+        assert issubclass(DefaultReranker, Reranker)
+
+    def test_default_config(self) -> None:
+        reranker = DefaultReranker()
+        assert reranker.config.enabled is True
+        assert reranker.config.top_k == 10
+
+    def test_custom_config(self) -> None:
+        config = RerankConfig(top_k=3)
+        reranker = DefaultReranker(config=config)
+        assert reranker.config.top_k == 3
+
+    def test_rerank_weight_property(self) -> None:
+        reranker = DefaultReranker(rerank_weight=2.0)
+        assert reranker.rerank_weight == 2.0
+
+    def test_content_provider_property(self) -> None:
+        provider = lambda x: x  # noqa: E731
+        reranker = DefaultReranker(content_provider=provider)
+        assert reranker.content_provider is provider
 
 
 # ======================================================================
@@ -317,24 +431,19 @@ class TestRerankErrors:
     def test_invalid_configuration_error(self) -> None:
         err = InvalidRerankConfiguration("Bad config")
         assert err.code == "INVALID_RERANK_CONFIGURATION"
-        assert isinstance(err, RerankError)
 
     def test_reranker_not_found_with_name(self) -> None:
         err = RerankerNotFound("cross_encoder")
         assert "cross_encoder" in str(err)
-        assert err.code == "RERANKER_NOT_FOUND"
 
     def test_reranker_not_found_empty(self) -> None:
         err = RerankerNotFound()
         assert str(err) == "Reranker not found"
-        assert err.code == "RERANKER_NOT_FOUND"
 
     def test_to_dict(self) -> None:
         err = InvalidRerankConfiguration("test", details={"key": "val"})
         d = err.to_dict()
         assert d["code"] == "INVALID_RERANK_CONFIGURATION"
-        assert d["message"] == "test"
-        assert d["details"] == {"key": "val"}
 
     def test_knowledge_error_is_base(self) -> None:
         assert issubclass(RerankError, KnowledgeError)

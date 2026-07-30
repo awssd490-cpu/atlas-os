@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from app.rag.rerank.base import Reranker
 from app.rag.rerank.config import RerankConfig
+from app.rag.rerank.default import DefaultReranker
 from app.rag.rerank.errors import (
     InvalidRerankConfiguration,
     RerankError,
@@ -23,6 +24,7 @@ from app.rag.rerank.registry import (
 )
 
 __all__ = [
+    "DefaultReranker",
     "InvalidRerankConfiguration",
     "RerankConfig",
     "RerankError",
