@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from app.rag.pipeline.base import KnowledgePipeline
 from app.rag.pipeline.config import PipelineConfig
+from app.rag.pipeline.default import DefaultKnowledgePipeline
 from app.rag.pipeline.errors import (
     InvalidPipelineConfiguration,
     PipelineError,
@@ -26,6 +27,7 @@ from app.rag.pipeline.registry import (
 )
 
 __all__ = [
+    "DefaultKnowledgePipeline",
     "InvalidPipelineConfiguration",
     "KnowledgePipeline",
     "PipelineConfig",

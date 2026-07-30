@@ -1,4 +1,4 @@
-"""Tests for the knowledge pipeline architecture."""
+"""Tests for the knowledge pipeline architecture and DefaultKnowledgePipeline."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from app.rag.pipeline import (
+    DefaultKnowledgePipeline,
     InvalidPipelineConfiguration,
     KnowledgePipeline,
     PipelineConfig,
@@ -52,6 +53,10 @@ class TestImports:
 
     def test_pipeline_result_imported(self) -> None:
         assert PipelineResult is PipelineResult_Impl
+
+    def test_default_pipeline_imported(self) -> None:
+        assert DefaultKnowledgePipeline is not None
+        assert issubclass(DefaultKnowledgePipeline, KnowledgePipeline)
 
     def test_error_hierarchy(self) -> None:
         assert issubclass(PipelineError, KnowledgeError)
@@ -355,3 +360,521 @@ class TestPipelineErrors:
 
     def test_knowledge_error_is_base(self) -> None:
         assert issubclass(PipelineError, KnowledgeError)
+
+
+# ======================================================================
+# DefaultKnowledgePipeline — ingestion tests
+# ======================================================================
+
+
+def _make_loader(
+    docs: list[Any],
+) -> Any:
+    """Build a loader callable that returns *docs*."""
+    def loader(path: str) -> list[Any]:
+        return docs
+    return loader
+
+
+@pytest.fixture
+def single_doc() -> list[Any]:
+    from app.rag.models import KnowledgeDocument
+    return [
+        KnowledgeDocument(
+            document_id="doc_1",
+            title="Test Document",
+            content="Paris is the capital of France. London is the capital of the UK.",
+        ),
+    ]
+
+
+@pytest.fixture
+def multi_docs() -> list[Any]:
+    from app.rag.models import KnowledgeDocument
+    return [
+        KnowledgeDocument(document_id="d1", title="Doc 1", content="Paris is the capital of France."),
+        KnowledgeDocument(document_id="d2", title="Doc 2", content="London is the capital of the UK."),
+        KnowledgeDocument(document_id="d3", title="Doc 3", content="Berlin is the capital of Germany."),
+    ]
+
+
+@pytest.fixture
+def empty_doc() -> list[Any]:
+    from app.rag.models import KnowledgeDocument
+    return [KnowledgeDocument(document_id="empty", title="Empty", content="")]
+
+
+@pytest.fixture
+def unicode_doc() -> list[Any]:
+    from app.rag.models import KnowledgeDocument
+    return [
+        KnowledgeDocument(
+            document_id="unicode_1",
+            title="Unicode",
+            content="Paris est la capitale de la France. 东京は日本の首都です。",
+        ),
+    ]
+
+
+@pytest.fixture
+def pipeline(single_doc: list[Any]) -> DefaultKnowledgePipeline:
+    from app.rag.chunking import ChunkingEngine, ChunkingConfig
+    from app.rag.knowledge_base import KnowledgeBase
+
+    chunk_config = ChunkingConfig(
+        strategy="whole_document",
+        min_chunk_size=1,
+    )
+    return DefaultKnowledgePipeline(
+        loader=_make_loader(single_doc),
+        chunker=ChunkingEngine(config=chunk_config),
+        knowledge_base=KnowledgeBase(),
+        config=PipelineConfig(auto_embed=False, auto_index=False),
+    )
+
+
+class TestDefaultPipelineConstruction:
+    def test_required_args(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+
+        p = DefaultKnowledgePipeline(
+            loader=_make_loader([]),
+            chunker=ChunkingEngine(),
+            knowledge_base=KnowledgeBase(),
+        )
+        assert isinstance(p, KnowledgePipeline)
+        assert p.loader is not None
+        assert p.chunker is not None
+        assert p.knowledge_base is not None
+        assert p.embedding_provider is None
+        assert p.vector_store is None
+
+    def test_subclass_of_knowledge_pipeline(self) -> None:
+        assert issubclass(DefaultKnowledgePipeline, KnowledgePipeline)
+
+    def test_default_config(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+
+        p = DefaultKnowledgePipeline(
+            loader=_make_loader([]),
+            chunker=ChunkingEngine(),
+            knowledge_base=KnowledgeBase(),
+        )
+        assert p.config.auto_embed is True
+        assert p.config.batch_size == 32
+
+    def test_custom_config(self) -> None:
+        from app.rag.chunking import ChunkingEngine
+        from app.rag.knowledge_base import KnowledgeBase
+
+        cfg = PipelineConfig(auto_embed=False, batch_size=16)
+        p = DefaultKnowledgePipeline(
+            loader=_make_loader([]),
+            chunker=ChunkingEngine(),
+            knowledge_base=KnowledgeBase(),
+            config=cfg,
+        )
+        assert p.config.batch_size == 16
+
+
+class TestDefaultPipelineSingleDocument:
+    """Ingest a single document and verify everything."""
+
+    @pytest.fixture(autouse=True)
+    async def setup(self, pipeline: DefaultKnowledgePipeline) -> None:
+        await pipeline.clear()
+
+    async def test_ingest_single(self, pipeline: DefaultKnowledgePipeline) -> None:
+        count = await pipeline.ingest("/fake/path")
+        assert count == 1
+        assert pipeline.knowledge_base.count() == 1
+
+    async def test_ingest_documents_single(
+        self, pipeline: DefaultKnowledgePipeline, single_doc: list[Any]
+    ) -> None:
+        result = await pipeline.ingest_documents(single_doc)
+        assert result.metadata["documents_ingested"] == 1
+        assert result.metadata["chunks_created"] > 0
+
+    async def test_stats_after_ingest(
+        self, pipeline: DefaultKnowledgePipeline, single_doc: list[Any]
+    ) -> None:
+        await pipeline.ingest_documents(single_doc)
+        s = await pipeline.stats()
+        assert s.documents == 1
+        assert s.chunks > 0
+
+    async def test_metadata_fields(
+        self, pipeline: DefaultKnowledgePipeline, single_doc: list[Any]
+    ) -> None:
+        result = await pipeline.ingest_documents(single_doc)
+        meta = result.metadata
+        assert "documents_ingested" in meta
+        assert "chunks_created" in meta
+        assert "vectors_created" in meta
+        assert "elapsed_time" in meta
+        assert "embedding_enabled" in meta
+        assert "indexing_enabled" in meta
+        assert meta["embedding_enabled"] is False
+        assert meta["indexing_enabled"] is False
+        assert meta["elapsed_time"] >= 0
+
+
+class TestDefaultPipelineMultipleDocuments:
+    @pytest.fixture(autouse=True)
+    async def setup(self, pipeline: DefaultKnowledgePipeline) -> None:
+        await pipeline.clear()
+
+    async def test_ingest_multiple(
+        self, pipeline: DefaultKnowledgePipeline, multi_docs: list[Any]
+    ) -> None:
+        result = await pipeline.ingest_documents(multi_docs)
+        assert result.metadata["documents_ingested"] == 3
+        assert pipeline.knowledge_base.count() == 3
+
+    async def test_stats_accumulates(
+        self, pipeline: DefaultKnowledgePipeline, multi_docs: list[Any]
+    ) -> None:
+        await pipeline.ingest_documents(multi_docs)
+        s = await pipeline.stats()
+        assert s.documents == 3
+        assert s.chunks > 0
+        assert s.searches == 0
+
+    async def test_deterministic_ordering(
+        self, pipeline: DefaultKnowledgePipeline, multi_docs: list[Any]
+    ) -> None:
+        """Ingesting the same documents twice yields the same chunk IDs."""
+        # Override pipeline with a loader for multi_docs
+        pipe = DefaultKnowledgePipeline(
+            loader=_make_loader(multi_docs),
+            chunker=pipeline.chunker,
+            knowledge_base=pipeline.knowledge_base,
+            config=PipelineConfig(auto_embed=False, auto_index=False),
+        )
+        await pipe.clear()
+        await pipe.ingest("/fake")
+        docs1 = [d.document_id for d in pipe.knowledge_base.list_documents()]
+
+        # Clear and re-ingest
+        await pipe.clear()
+        result = await pipe.ingest_documents(multi_docs)
+        assert result.metadata["documents_ingested"] == 3
+        docs2 = [d.document_id for d in pipe.knowledge_base.list_documents()]
+        assert docs1 == docs2
+
+
+class TestDefaultPipelineEmptyDocument:
+    @pytest.fixture(autouse=True)
+    async def setup(self, pipeline: DefaultKnowledgePipeline) -> None:
+        await pipeline.clear()
+
+    async def test_empty_document(
+        self, pipeline: DefaultKnowledgePipeline, empty_doc: list[Any]
+    ) -> None:
+        result = await pipeline.ingest_documents(empty_doc)
+        # Empty content still produces 0 chunks
+        assert result.metadata["documents_ingested"] == 1
+        assert result.metadata["chunks_created"] == 0
+
+
+class TestDefaultPipelineUnicode:
+    @pytest.fixture(autouse=True)
+    async def setup(self, pipeline: DefaultKnowledgePipeline) -> None:
+        await pipeline.clear()
+
+    async def test_unicode_ingest(
+        self, pipeline: DefaultKnowledgePipeline, unicode_doc: list[Any]
+    ) -> None:
+        result = await pipeline.ingest_documents(unicode_doc)
+        assert result.metadata["documents_ingested"] == 1
+        assert result.metadata["chunks_created"] > 0
+
+    async def test_unicode_content_preserved(
+        self, pipeline: DefaultKnowledgePipeline, unicode_doc: list[Any]
+    ) -> None:
+        await pipeline.ingest_documents(unicode_doc)
+        doc = pipeline.knowledge_base.get("unicode_1")
+        assert doc is not None
+        assert "东京" in doc.content
+
+
+class TestDefaultPipelineDuplicates:
+    """Duplicate documents are silently skipped."""
+
+    @pytest.fixture(autouse=True)
+    async def setup(self, pipeline: DefaultKnowledgePipeline) -> None:
+        await pipeline.clear()
+
+    async def test_duplicate_skipped(
+        self, pipeline: DefaultKnowledgePipeline, single_doc: list[Any]
+    ) -> None:
+        await pipeline.ingest_documents(single_doc)
+        result = await pipeline.ingest_documents(single_doc)
+        # Second ingest should skip the duplicate
+        assert result.metadata["documents_ingested"] == 0
+
+    async def test_stats_after_duplicate(
+        self, pipeline: DefaultKnowledgePipeline, single_doc: list[Any]
+    ) -> None:
+        await pipeline.ingest_documents(single_doc)
+        await pipeline.ingest_documents(single_doc)
+        s = await pipeline.stats()
+        assert s.documents == 1  # Only 1 unique doc
+
+
+class TestDefaultPipelineClear:
+    async def test_clear_resets_all(
+        self, pipeline: DefaultKnowledgePipeline, single_doc: list[Any]
+    ) -> None:
+        await pipeline.ingest_documents(single_doc)
+        assert pipeline.knowledge_base.count() > 0
+        await pipeline.clear()
+        assert pipeline.knowledge_base.count() == 0
+        s = await pipeline.stats()
+        assert s.documents == 0
+        assert s.chunks == 0
+        assert s.vectors == 0
+        assert s.searches == 0
+
+    async def test_clear_with_vector_store(
+        self, single_doc: list[Any]
+    ) -> None:
+        from app.rag.chunking import ChunkingEngine, ChunkingConfig
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.vectorstore import MemoryVectorStore
+
+        vs = MemoryVectorStore()
+        pipe = DefaultKnowledgePipeline(
+            loader=_make_loader(single_doc),
+            chunker=ChunkingEngine(config=ChunkingConfig(strategy="whole_document", min_chunk_size=1)),
+            knowledge_base=KnowledgeBase(),
+            vector_store=vs,
+            config=PipelineConfig(auto_embed=False, auto_index=False),
+        )
+        await pipe.ingest_documents(single_doc)
+        assert vs.count() == 0  # No embedding, nothing indexed
+        await pipe.clear()
+
+
+class TestDefaultPipelineAutoEmbed:
+    """Ingestion with auto_embed=True generates vectors."""
+
+    @pytest.fixture
+    def emb_pipeline(self, single_doc: list[Any]) -> DefaultKnowledgePipeline:
+        from app.rag.chunking import ChunkingEngine, ChunkingConfig
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.embeddings import EmbeddingConfig, DeterministicEmbeddingProvider
+
+        emb_cfg = EmbeddingConfig(provider_name="det", dimensions=4, normalize_embeddings=True)
+        provider = DeterministicEmbeddingProvider(emb_cfg)
+
+        return DefaultKnowledgePipeline(
+            loader=_make_loader(single_doc),
+            chunker=ChunkingEngine(config=ChunkingConfig(strategy="whole_document", min_chunk_size=1)),
+            knowledge_base=KnowledgeBase(),
+            embedding_provider=provider,
+            config=PipelineConfig(auto_embed=True, auto_index=False),
+        )
+
+    async def test_auto_embed_creates_vectors(
+        self, emb_pipeline: DefaultKnowledgePipeline, single_doc: list[Any]
+    ) -> None:
+        await emb_pipeline.clear()
+        result = await emb_pipeline.ingest_documents(single_doc)
+        assert result.metadata["embedding_enabled"] is True
+        assert result.metadata["vectors_created"] > 0
+
+    async def test_auto_embed_stats(
+        self, emb_pipeline: DefaultKnowledgePipeline, single_doc: list[Any]
+    ) -> None:
+        await emb_pipeline.clear()
+        await emb_pipeline.ingest_documents(single_doc)
+        s = await emb_pipeline.stats()
+        assert s.vectors > 0
+
+
+class TestDefaultPipelineAutoIndex:
+    """Ingestion with auto_index=True inserts vectors into the store."""
+
+    @pytest.fixture
+    def index_pipeline(self, single_doc: list[Any]) -> DefaultKnowledgePipeline:
+        from app.rag.chunking import ChunkingEngine, ChunkingConfig
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.embeddings import EmbeddingConfig, DeterministicEmbeddingProvider
+        from app.rag.vectorstore import MemoryVectorStore
+
+        emb_cfg = EmbeddingConfig(provider_name="det", dimensions=4, normalize_embeddings=True)
+        provider = DeterministicEmbeddingProvider(emb_cfg)
+
+        return DefaultKnowledgePipeline(
+            loader=_make_loader(single_doc),
+            chunker=ChunkingEngine(config=ChunkingConfig(strategy="whole_document", min_chunk_size=1)),
+            knowledge_base=KnowledgeBase(),
+            embedding_provider=provider,
+            vector_store=MemoryVectorStore(),
+            config=PipelineConfig(auto_embed=True, auto_index=True),
+        )
+
+    async def test_auto_index_adds_vectors(
+        self, index_pipeline: DefaultKnowledgePipeline, single_doc: list[Any]
+    ) -> None:
+        await index_pipeline.clear()
+        await index_pipeline.ingest_documents(single_doc)
+        assert index_pipeline.vector_store is not None
+        assert index_pipeline.vector_store.count() > 0
+
+    async def test_auto_index_stats(
+        self, index_pipeline: DefaultKnowledgePipeline, single_doc: list[Any]
+    ) -> None:
+        await index_pipeline.clear()
+        result = await index_pipeline.ingest_documents(single_doc)
+        assert result.metadata["indexing_enabled"] is True
+        assert result.metadata["vectors_created"] > 0
+
+    async def test_indexing_enabled_metadata(
+        self, index_pipeline: DefaultKnowledgePipeline, single_doc: list[Any]
+    ) -> None:
+        await index_pipeline.clear()
+        result = await index_pipeline.ingest_documents(single_doc)
+        assert result.metadata["embedding_enabled"] is True
+        assert result.metadata["indexing_enabled"] is True
+
+    async def test_clear_clears_vector_store(
+        self, index_pipeline: DefaultKnowledgePipeline, single_doc: list[Any]
+    ) -> None:
+        await index_pipeline.clear()
+        await index_pipeline.ingest_documents(single_doc)
+        assert index_pipeline.vector_store is not None
+        assert index_pipeline.vector_store.count() > 0
+        await index_pipeline.clear()
+        assert index_pipeline.vector_store.count() == 0
+
+
+class TestDefaultPipelineDisabledEmbed:
+    """Ingestion with auto_embed=False does not generate vectors."""
+
+    @pytest.fixture
+    def no_emb_pipeline(self, single_doc: list[Any]) -> DefaultKnowledgePipeline:
+        from app.rag.chunking import ChunkingEngine, ChunkingConfig
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.embeddings import EmbeddingConfig, DeterministicEmbeddingProvider
+
+        emb_cfg = EmbeddingConfig(provider_name="det", dimensions=4, normalize_embeddings=True)
+        provider = DeterministicEmbeddingProvider(emb_cfg)
+
+        return DefaultKnowledgePipeline(
+            loader=_make_loader(single_doc),
+            chunker=ChunkingEngine(config=ChunkingConfig(strategy="whole_document", min_chunk_size=1)),
+            knowledge_base=KnowledgeBase(),
+            embedding_provider=provider,
+            config=PipelineConfig(auto_embed=False, auto_index=False),
+        )
+
+    async def test_no_vectors_created(
+        self, no_emb_pipeline: DefaultKnowledgePipeline, single_doc: list[Any]
+    ) -> None:
+        await no_emb_pipeline.clear()
+        result = await no_emb_pipeline.ingest_documents(single_doc)
+        assert result.metadata["embedding_enabled"] is False
+        assert result.metadata["vectors_created"] == 0
+
+
+class TestDefaultPipelineDisabledIndex:
+    """Ingestion with auto_index=False does not insert into vector store."""
+
+    @pytest.fixture
+    def no_idx_pipeline(self, single_doc: list[Any]) -> DefaultKnowledgePipeline:
+        from app.rag.chunking import ChunkingEngine, ChunkingConfig
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.embeddings import EmbeddingConfig, DeterministicEmbeddingProvider
+        from app.rag.vectorstore import MemoryVectorStore
+
+        emb_cfg = EmbeddingConfig(provider_name="det", dimensions=4, normalize_embeddings=True)
+        provider = DeterministicEmbeddingProvider(emb_cfg)
+
+        return DefaultKnowledgePipeline(
+            loader=_make_loader(single_doc),
+            chunker=ChunkingEngine(config=ChunkingConfig(strategy="whole_document", min_chunk_size=1)),
+            knowledge_base=KnowledgeBase(),
+            embedding_provider=provider,
+            vector_store=MemoryVectorStore(),
+            config=PipelineConfig(auto_embed=True, auto_index=False),
+        )
+
+    async def test_no_vectors_in_store(
+        self, no_idx_pipeline: DefaultKnowledgePipeline, single_doc: list[Any]
+    ) -> None:
+        await no_idx_pipeline.clear()
+        result = await no_idx_pipeline.ingest_documents(single_doc)
+        assert result.metadata["embedding_enabled"] is True
+        assert result.metadata["indexing_enabled"] is False
+        assert no_idx_pipeline.vector_store is not None
+        # Vectors are created but not indexed into vector store
+        assert no_idx_pipeline.vector_store.count() == 0
+
+
+class TestDefaultPipelineBatchSize:
+    """Respects batch_size setting for embedding batches."""
+
+    async def test_batch_size_respected(self) -> None:
+        from app.rag.chunking import ChunkingEngine, ChunkingConfig
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.embeddings import EmbeddingConfig, DeterministicEmbeddingProvider
+        from app.rag.models import KnowledgeDocument
+
+        # Create enough docs to require multiple batches (batch_size=2)
+        docs = [
+            KnowledgeDocument(
+                document_id=f"d{i}",
+                title=f"Doc {i}",
+                content=f"This is document number {i} with enough text to get chunked.",
+            )
+            for i in range(5)
+        ]
+
+        emb_cfg = EmbeddingConfig(provider_name="det", dimensions=4, normalize_embeddings=True)
+        provider = DeterministicEmbeddingProvider(emb_cfg)
+
+        pipe = DefaultKnowledgePipeline(
+            loader=_make_loader(docs),
+            chunker=ChunkingEngine(config=ChunkingConfig(strategy="whole_document", min_chunk_size=1)),
+            knowledge_base=KnowledgeBase(),
+            embedding_provider=provider,
+            config=PipelineConfig(auto_embed=True, auto_index=False, batch_size=2),
+        )
+        await pipe.clear()
+        result = await pipe.ingest_documents(docs)
+        assert result.metadata["documents_ingested"] == 5
+        assert result.metadata["vectors_created"] > 0
+
+
+class TestDefaultPipelineDeterministic:
+    """Repeated ingestion of identical documents produces identical results."""
+
+    async def test_stats_deterministic(self) -> None:
+        from app.rag.chunking import ChunkingEngine, ChunkingConfig
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument
+
+        docs = [
+            KnowledgeDocument(document_id="a", title="A", content="Hello world."),
+            KnowledgeDocument(document_id="b", title="B", content="Foo bar baz."),
+        ]
+
+        cfg = PipelineConfig(auto_embed=False, auto_index=False)
+        pipe = DefaultKnowledgePipeline(
+            loader=_make_loader(docs),
+            chunker=ChunkingEngine(config=ChunkingConfig(strategy="whole_document", min_chunk_size=1)),
+            knowledge_base=KnowledgeBase(),
+            config=cfg,
+        )
+        await pipe.clear()
+        r1 = await pipe.ingest_documents(docs)
+        await pipe.clear()
+        r2 = await pipe.ingest_documents(docs)
+
+        assert r1.metadata["documents_ingested"] == r2.metadata["documents_ingested"]
+        assert r1.metadata["chunks_created"] == r2.metadata["chunks_created"]
