@@ -12,6 +12,7 @@ from __future__ import annotations
 from app.rag.evaluation.base import EvaluationRunner
 from app.rag.evaluation.benchmark import BenchmarkRunner
 from app.rag.evaluation.config import EvaluationConfig
+from app.rag.evaluation.datasets import DatasetLoader, EvaluationDataset, EvaluationSample
 from app.rag.evaluation.errors import (
     EvaluationError,
     EvaluationNotFound,
@@ -30,11 +31,14 @@ from app.rag.evaluation.retrieval_metrics import RetrievalMetrics
 __all__ = [
     "BenchmarkResult",
     "BenchmarkRunner",
+    "DatasetLoader",
     "EvaluationConfig",
+    "EvaluationDataset",
     "EvaluationError",
     "EvaluationNotFound",
     "EvaluationResult",
     "EvaluationRunner",
+    "EvaluationSample",
     "InvalidEvaluationConfiguration",
     "RetrievalMetrics",
     "clear_runners",

@@ -9,11 +9,14 @@ import pytest
 from app.rag.evaluation import (
     BenchmarkResult,
     BenchmarkRunner,
+    DatasetLoader,
     EvaluationConfig,
+    EvaluationDataset,
     EvaluationError,
     EvaluationNotFound,
     EvaluationResult,
     EvaluationRunner,
+    EvaluationSample,
     InvalidEvaluationConfiguration,
     RetrievalMetrics,
     clear_runners,
@@ -25,6 +28,9 @@ from app.rag.evaluation import (
 from app.rag.evaluation.base import EvaluationRunner as EvaluationRunner_Impl
 from app.rag.evaluation.benchmark import BenchmarkRunner as BenchmarkRunner_Impl
 from app.rag.evaluation.config import EvaluationConfig as EvaluationConfig_Impl
+from app.rag.evaluation.datasets import DatasetLoader as DatasetLoader_Impl
+from app.rag.evaluation.datasets import EvaluationDataset as EvaluationDataset_Impl
+from app.rag.evaluation.datasets import EvaluationSample as EvaluationSample_Impl
 from app.rag.evaluation.errors import EvaluationError as EvaluationError_Impl
 from app.rag.evaluation.errors import EvaluationNotFound as EvaluationNotFound_Impl
 from app.rag.evaluation.models import BenchmarkResult as BenchmarkResult_Impl
@@ -74,6 +80,15 @@ class TestImports:
 
     def test_benchmark_runner_imported(self) -> None:
         assert BenchmarkRunner is BenchmarkRunner_Impl
+
+    def test_evaluation_sample_imported(self) -> None:
+        assert EvaluationSample is EvaluationSample_Impl
+
+    def test_evaluation_dataset_imported(self) -> None:
+        assert EvaluationDataset is EvaluationDataset_Impl
+
+    def test_dataset_loader_imported(self) -> None:
+        assert DatasetLoader is DatasetLoader_Impl
 
 
 # ======================================================================
@@ -1020,3 +1035,388 @@ class TestBenchmarkRunnerRun:
             benchmark_runs=5,
         )
         assert result.total_duration > 0
+
+
+# ======================================================================
+# EvaluationSample
+# ======================================================================
+
+
+class TestEvaluationSample:
+    """EvaluationSample frozen dataclass."""
+
+    def test_default_values(self) -> None:
+        s = EvaluationSample()
+        assert s.query == ""
+        assert s.relevant_ids == frozenset()
+        assert s.metadata == {}
+
+    def test_custom_values(self) -> None:
+        s = EvaluationSample(
+            query="capital of France",
+            relevant_ids=frozenset({"doc1", "doc2"}),
+            metadata={"difficulty": "easy"},
+        )
+        assert s.query == "capital of France"
+        assert s.relevant_ids == frozenset({"doc1", "doc2"})
+        assert s.metadata == {"difficulty": "easy"}
+
+    def test_immutable(self) -> None:
+        s = EvaluationSample(query="test")
+        with pytest.raises(AttributeError):
+            s.query = "changed"  # type: ignore[misc]
+
+    def test_relevant_ids_is_frozenset(self) -> None:
+        s = EvaluationSample(relevant_ids=frozenset({"a", "b"}))
+        assert isinstance(s.relevant_ids, frozenset)
+
+    def test_unicode(self) -> None:
+        s = EvaluationSample(
+            query="東京の首都",
+            relevant_ids=frozenset({"doc_東京"}),
+        )
+        assert "東京" in s.query
+        assert "doc_東京" in s.relevant_ids
+
+
+# ======================================================================
+# EvaluationDataset
+# ======================================================================
+
+
+class TestEvaluationDataset:
+    """EvaluationDataset frozen dataclass."""
+
+    def test_default_values(self) -> None:
+        d = EvaluationDataset()
+        assert d.name == ""
+        assert d.samples == ()
+        assert d.metadata == {}
+        assert d.size == 0
+        assert d.is_empty is True
+
+    def test_custom_values(self) -> None:
+        samples = (
+            EvaluationSample(query="q1", relevant_ids=frozenset({"a"})),
+            EvaluationSample(query="q2", relevant_ids=frozenset({"b"})),
+        )
+        d = EvaluationDataset(
+            name="test-ds",
+            samples=samples,
+            metadata={"version": "1.0"},
+        )
+        assert d.name == "test-ds"
+        assert d.size == 2
+        assert d.is_empty is False
+        assert d.metadata == {"version": "1.0"}
+
+    def test_immutable(self) -> None:
+        d = EvaluationDataset(name="ds")
+        with pytest.raises(AttributeError):
+            d.name = "changed"  # type: ignore[misc]
+
+    def test_size_property(self) -> None:
+        d = EvaluationDataset(samples=(
+            EvaluationSample(query="a"),
+            EvaluationSample(query="b"),
+        ))
+        assert d.size == 2
+
+    def test_is_empty_true(self) -> None:
+        d = EvaluationDataset()
+        assert d.is_empty is True
+
+    def test_is_empty_false(self) -> None:
+        d = EvaluationDataset(samples=(EvaluationSample(query="a"),))
+        assert d.is_empty is False
+
+    def test_queries(self) -> None:
+        d = EvaluationDataset(samples=(
+            EvaluationSample(query="q1", relevant_ids=frozenset({"a"})),
+            EvaluationSample(query="q2", relevant_ids=frozenset({"b"})),
+        ))
+        assert d.queries() == ["q1", "q2"]
+
+    def test_relevant_sets(self) -> None:
+        d = EvaluationDataset(samples=(
+            EvaluationSample(query="q1", relevant_ids=frozenset({"a", "b"})),
+        ))
+        result = d.relevant_sets()
+        assert len(result) == 1
+        assert result[0] == frozenset({"a", "b"})
+
+    def test_sample(self) -> None:
+        s1 = EvaluationSample(query="q1")
+        s2 = EvaluationSample(query="q2")
+        d = EvaluationDataset(samples=(s1, s2))
+        assert d.sample(0) is s1
+        assert d.sample(1) is s2
+
+    def test_sample_out_of_range(self) -> None:
+        d = EvaluationDataset()
+        with pytest.raises(IndexError):
+            d.sample(0)
+
+    def test_unicode(self) -> None:
+        s = EvaluationSample(query="東京", relevant_ids=frozenset({"doc_1"}))
+        d = EvaluationDataset(name="日本語", samples=(s,))
+        assert "日本語" in d.name
+        assert d.sample(0).query == "東京"
+
+    def test_empty_samples(self) -> None:
+        d = EvaluationDataset(samples=())
+        assert d.size == 0
+        assert d.queries() == []
+        assert d.relevant_sets() == []
+
+
+# ======================================================================
+# DatasetLoader — from_dict
+# ======================================================================
+
+
+class TestDatasetLoaderFromDict:
+    """DatasetLoader.from_dict() tests."""
+
+    def test_basic(self) -> None:
+        data = {
+            "name": "test",
+            "samples": [
+                {"query": "q1", "relevant_ids": ["a", "b"]},
+                {"query": "q2", "relevant_ids": ["c"]},
+            ],
+        }
+        ds = DatasetLoader.from_dict(data)
+        assert ds.name == "test"
+        assert ds.size == 2
+        assert ds.sample(0).query == "q1"
+        assert ds.sample(0).relevant_ids == frozenset({"a", "b"})
+        assert ds.sample(1).query == "q2"
+
+    def test_with_metadata(self) -> None:
+        data = {
+            "name": "test",
+            "metadata": {"version": "2", "source": "wiki"},
+            "samples": [
+                {"query": "q", "relevant_ids": ["a"], "metadata": {"difficulty": "hard"}},
+            ],
+        }
+        ds = DatasetLoader.from_dict(data)
+        assert ds.metadata == {"version": "2", "source": "wiki"}
+        assert ds.sample(0).metadata == {"difficulty": "hard"}
+
+    def test_empty_samples(self) -> None:
+        ds = DatasetLoader.from_dict({"name": "empty", "samples": []})
+        assert ds.size == 0
+        assert ds.is_empty
+
+    def test_default_name(self) -> None:
+        ds = DatasetLoader.from_dict({"samples": []})
+        assert ds.name == ""
+
+    def test_unicode(self) -> None:
+        data = {
+            "name": "unicode-test",
+            "samples": [
+                {"query": "東京の首都", "relevant_ids": ["doc_東京"]},
+            ],
+        }
+        ds = DatasetLoader.from_dict(data)
+        assert "東京" in ds.sample(0).query
+        assert "doc_東京" in ds.sample(0).relevant_ids
+
+    def test_not_a_dict(self) -> None:
+        with pytest.raises(InvalidEvaluationConfiguration) as exc:
+            DatasetLoader.from_dict([])  # type: ignore[arg-type]
+        assert "object" in str(exc.value).lower()
+
+    def test_name_not_string(self) -> None:
+        with pytest.raises(InvalidEvaluationConfiguration) as exc:
+            DatasetLoader.from_dict({"name": 123, "samples": []})
+        assert "name" in str(exc.value).lower()
+
+    def test_missing_samples(self) -> None:
+        with pytest.raises(InvalidEvaluationConfiguration) as exc:
+            DatasetLoader.from_dict({"name": "x"})
+        assert "samples" in str(exc.value).lower()
+
+    def test_samples_not_list(self) -> None:
+        with pytest.raises(InvalidEvaluationConfiguration) as exc:
+            DatasetLoader.from_dict({"name": "x", "samples": "not a list"})
+        assert "samples" in str(exc.value).lower()
+
+    def test_sample_not_dict(self) -> None:
+        with pytest.raises(InvalidEvaluationConfiguration) as exc:
+            DatasetLoader.from_dict({"name": "x", "samples": ["string"]})
+        assert "object" in str(exc.value).lower()
+
+    def test_query_not_string(self) -> None:
+        with pytest.raises(InvalidEvaluationConfiguration) as exc:
+            DatasetLoader.from_dict({"name": "x", "samples": [{"query": 42}]})
+        assert "query" in str(exc.value).lower()
+
+    def test_relevant_ids_not_list(self) -> None:
+        with pytest.raises(InvalidEvaluationConfiguration) as exc:
+            DatasetLoader.from_dict({"name": "x", "samples": [{"query": "q", "relevant_ids": "a"}]})
+        assert "relevant_ids" in str(exc.value).lower()
+
+    def test_relevant_id_not_string(self) -> None:
+        with pytest.raises(InvalidEvaluationConfiguration) as exc:
+            DatasetLoader.from_dict({"name": "x", "samples": [{"query": "q", "relevant_ids": [1]}]})
+        assert "relevant_ids" in str(exc.value).lower()
+
+    def test_metadata_not_dict(self) -> None:
+        with pytest.raises(InvalidEvaluationConfiguration) as exc:
+            DatasetLoader.from_dict({"name": "x", "samples": [], "metadata": "bad"})
+        assert "metadata" in str(exc.value).lower()
+
+    def test_sample_metadata_not_dict(self) -> None:
+        with pytest.raises(InvalidEvaluationConfiguration) as exc:
+            DatasetLoader.from_dict({
+                "name": "x", "samples": [{"query": "q", "metadata": "bad"}],
+            })
+        assert "metadata" in str(exc.value).lower()
+
+    def test_duplicate_ids_deduped(self) -> None:
+        ds = DatasetLoader.from_dict({
+            "name": "test",
+            "samples": [{"query": "q", "relevant_ids": ["a", "a", "b"]}],
+        })
+        assert ds.sample(0).relevant_ids == frozenset({"a", "b"})
+
+
+# ======================================================================
+# DatasetLoader — to_dict / to_json
+# ======================================================================
+
+
+class TestDatasetLoaderToDict:
+    """DatasetLoader.to_dict() tests."""
+
+    def test_round_trip(self) -> None:
+        data = {
+            "name": "roundtrip",
+            "metadata": {"v": 1},
+            "samples": [
+                {"query": "q1", "relevant_ids": ["b", "a"], "metadata": {}},
+                {"query": "q2", "relevant_ids": ["c"], "metadata": {}},
+            ],
+        }
+        ds = DatasetLoader.from_dict(data)
+        result = DatasetLoader.to_dict(ds)
+        assert result["name"] == "roundtrip"
+        assert result["metadata"] == {"v": 1}
+        assert result["samples"][0]["relevant_ids"] == ["a", "b"]
+
+    def test_deterministic(self) -> None:
+        ds = DatasetLoader.from_dict({
+            "name": "det",
+            "samples": [{"query": "z", "relevant_ids": ["c", "a", "b"]}],
+        })
+        a = DatasetLoader.to_dict(ds)
+        b = DatasetLoader.to_dict(ds)
+        assert a == b
+
+    def test_unicode_round_trip(self) -> None:
+        ds = DatasetLoader.from_dict({
+            "name": "日本語",
+            "samples": [{"query": "東京", "relevant_ids": ["doc_東京"]}],
+        })
+        result = DatasetLoader.to_dict(ds)
+        assert result["name"] == "日本語"
+        assert result["samples"][0]["query"] == "東京"
+
+
+class TestDatasetLoaderToJson:
+    """DatasetLoader.to_json() and from_json() tests."""
+
+    def test_round_trip(self, tmp_path: str) -> None:
+        import json
+        path = str(tmp_path / "dataset.json")
+        data = {
+            "name": "json-test",
+            "metadata": {"version": "1"},
+            "samples": [
+                {"query": "capital of France", "relevant_ids": ["doc1", "doc2"]},
+                {"query": "capital of Japan", "relevant_ids": ["doc3"]},
+            ],
+        }
+        ds = DatasetLoader.from_dict(data)
+        DatasetLoader.to_json(ds, path)
+
+        loaded = DatasetLoader.from_json(path)
+        assert loaded.name == "json-test"
+        assert loaded.size == 2
+        assert loaded.sample(0).query == "capital of France"
+
+    def test_deterministic_output(self, tmp_path: str) -> None:
+        import json
+        path = str(tmp_path / "det.json")
+        ds = DatasetLoader.from_dict({
+            "name": "det",
+            "samples": [{"query": "q", "relevant_ids": ["c", "a"]}],
+        })
+        DatasetLoader.to_json(ds, path)
+        DatasetLoader.to_json(ds, path)
+        with open(path, encoding="utf-8") as f:
+            first = json.load(f)
+
+        with open(path, encoding="utf-8") as f:
+            second = json.load(f)
+        assert first == second
+
+    def test_unicode_file(self, tmp_path: str) -> None:
+        path = str(tmp_path / "unicode.json")
+        ds = DatasetLoader.from_dict({
+            "name": "日本語",
+            "samples": [{"query": "東京", "relevant_ids": ["doc_東京"]}],
+        })
+        DatasetLoader.to_json(ds, path)
+        loaded = DatasetLoader.from_json(path)
+        assert "東京" in loaded.sample(0).query
+
+    def test_file_not_found(self) -> None:
+        with pytest.raises(EvaluationError) as exc:
+            DatasetLoader.from_json("/nonexistent/path.json")
+        assert "does not exist" in str(exc.value)
+
+    def test_invalid_json(self, tmp_path: str) -> None:
+        path = str(tmp_path / "bad.json")
+        with open(path, "w") as f:
+            f.write("not json")
+        with pytest.raises(EvaluationError) as exc:
+            DatasetLoader.from_json(path)
+        assert "parse" in str(exc.value).lower()
+
+    def test_root_not_object(self, tmp_path: str) -> None:
+        import json
+        path = str(tmp_path / "list.json")
+        with open(path, "w") as f:
+            json.dump([], f)
+        with pytest.raises(InvalidEvaluationConfiguration) as exc:
+            DatasetLoader.from_json(path)
+        assert "object" in str(exc.value).lower()
+
+
+# ======================================================================
+# DatasetLoader — empty dataset serialization
+# ======================================================================
+
+
+class TestDatasetLoaderEmpty:
+    """Empty dataset serialization round-trip."""
+
+    def test_empty_round_trip_dict(self) -> None:
+        data = {"name": "empty", "samples": []}
+        ds = DatasetLoader.from_dict(data)
+        result = DatasetLoader.to_dict(ds)
+        assert result["name"] == "empty"
+        assert result["samples"] == []
+
+    def test_empty_to_json(self, tmp_path: str) -> None:
+        path = str(tmp_path / "empty.json")
+        ds = DatasetLoader.from_dict({"name": "empty", "samples": []})
+        DatasetLoader.to_json(ds, path)
+        loaded = DatasetLoader.from_json(path)
+        assert loaded.size == 0
+        assert loaded.is_empty
