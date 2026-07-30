@@ -17,6 +17,7 @@ from app.rag.persistence.errors import (
     PersistenceError,
     PersistenceNotFound,
 )
+from app.rag.persistence.json_backend import JsonPersistenceBackend
 from app.rag.persistence.models import PersistenceResult, PersistenceStats
 from app.rag.persistence.registry import (
     clear_backends,
@@ -28,6 +29,7 @@ from app.rag.persistence.registry import (
 
 __all__ = [
     "InvalidPersistenceConfiguration",
+    "JsonPersistenceBackend",
     "PersistenceBackend",
     "PersistenceConfig",
     "PersistenceError",

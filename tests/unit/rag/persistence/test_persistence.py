@@ -1,13 +1,18 @@
-"""Tests for the persistence architecture."""
+"""Tests for the persistence architecture and JsonPersistenceBackend."""
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from app.rag.persistence import (
     InvalidPersistenceConfiguration,
+    JsonPersistenceBackend,
     PersistenceBackend,
     PersistenceConfig,
     PersistenceError,
@@ -52,6 +57,10 @@ class TestImports:
 
     def test_persistence_result_imported(self) -> None:
         assert PersistenceResult is PersistenceResult_Impl
+
+    def test_json_backend_imported(self) -> None:
+        assert JsonPersistenceBackend is not None
+        assert issubclass(JsonPersistenceBackend, PersistenceBackend)
 
     def test_error_hierarchy(self) -> None:
         assert issubclass(PersistenceError, KnowledgeError)
@@ -392,3 +401,549 @@ class TestPersistenceErrors:
 
     def test_knowledge_error_is_base(self) -> None:
         assert issubclass(PersistenceError, KnowledgeError)
+
+
+# ======================================================================
+# JsonPersistenceBackend — save tests
+# ======================================================================
+
+
+@pytest.fixture
+def tmp_path() -> str:
+    """Return a temporary file path for JSON output."""
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    os.remove(path)
+    yield path
+    if os.path.exists(path):
+        os.remove(path)
+
+
+@pytest.fixture
+def empty_kb() -> Any:
+    from app.rag.knowledge_base import KnowledgeBase
+    return KnowledgeBase()
+
+
+@pytest.fixture
+def populated_kb() -> Any:
+    from app.rag.knowledge_base import KnowledgeBase
+    from app.rag.models import KnowledgeDocument, KnowledgeChunk, KnowledgeMetadata
+    kb = KnowledgeBase()
+    doc = KnowledgeDocument(
+        document_id="doc_1",
+        title="Test Document",
+        content="Paris is the capital of France. London is the capital of the UK.",
+        chunks=(
+            KnowledgeChunk(
+                chunk_id="doc_1:0",
+                document_id="doc_1",
+                content="Paris is the capital of France.",
+                index=0,
+                metadata=KnowledgeMetadata(source="test", tags=("geography",)),
+            ),
+            KnowledgeChunk(
+                chunk_id="doc_1:1",
+                document_id="doc_1",
+                content="London is the capital of the UK.",
+                index=1,
+                metadata=KnowledgeMetadata(source="test", tags=("geography",)),
+            ),
+        ),
+        metadata=KnowledgeMetadata(source="test"),
+    )
+    kb.register(doc)
+    return kb
+
+
+@pytest.fixture
+def kb_with_embeddings() -> Any:
+    from app.rag.knowledge_base import KnowledgeBase
+    from app.rag.models import KnowledgeDocument, KnowledgeChunk, KnowledgeMetadata
+    from app.rag.embeddings import EmbeddingConfig, DeterministicEmbeddingProvider
+    from app.rag.embeddings.models import EmbeddingVector
+
+    provider = DeterministicEmbeddingProvider(
+        EmbeddingConfig(provider_name="det", dimensions=4, normalize_embeddings=True)
+    )
+    kb = KnowledgeBase(
+        embedding_provider=provider,
+    )
+    doc = KnowledgeDocument(
+        document_id="emb_doc",
+        title="Embedded Document",
+        content="Paris is the capital of France.",
+        chunks=(
+            KnowledgeChunk(
+                chunk_id="emb_doc:0",
+                document_id="emb_doc",
+                content="Paris is the capital of France.",
+                index=0,
+            ),
+        ),
+    )
+    kb.register(doc)
+    # Manually inject embedding vector
+    import asyncio
+    result = asyncio.run(provider.embed_batch(["Paris is the capital of France."]))
+    kb._embeddings["emb_doc:0"] = result.embeddings[0]
+    return kb
+
+
+@pytest.fixture
+def kb_with_vectors() -> Any:
+    from app.rag.knowledge_base import KnowledgeBase
+    from app.rag.models import KnowledgeDocument, KnowledgeChunk
+    from app.rag.embeddings import EmbeddingConfig, DeterministicEmbeddingProvider
+    from app.rag.embeddings.models import EmbeddingVector
+    from app.rag.vectorstore import MemoryVectorStore
+
+    provider = DeterministicEmbeddingProvider(
+        EmbeddingConfig(provider_name="det", dimensions=4, normalize_embeddings=True)
+    )
+    vs = MemoryVectorStore()
+    kb = KnowledgeBase(
+        embedding_provider=provider,
+        vector_store=vs,
+    )
+    doc = KnowledgeDocument(
+        document_id="vec_doc",
+        title="Vector Document",
+        content="Berlin is the capital of Germany.",
+        chunks=(
+            KnowledgeChunk(
+                chunk_id="vec_doc:0",
+                document_id="vec_doc",
+                content="Berlin is the capital of Germany.",
+                index=0,
+            ),
+        ),
+    )
+    kb.register(doc)
+    # Manually inject embedding and vector
+    import asyncio
+    result = asyncio.run(provider.embed_batch(["Berlin is the capital of Germany."]))
+    kb._embeddings["vec_doc:0"] = result.embeddings[0]
+    vs.add("vec_doc:0", result.embeddings[0].vector)
+    return kb
+
+
+# ======================================================================
+# JsonPersistenceBackend — construction
+# ======================================================================
+
+
+class TestJsonBackendConstruction:
+    def test_subclass_of_persistence_backend(self) -> None:
+        assert issubclass(JsonPersistenceBackend, PersistenceBackend)
+
+    def test_default_config(self) -> None:
+        backend = JsonPersistenceBackend()
+        assert backend.config.compress is True
+        assert backend.config.overwrite is False
+
+    def test_custom_config(self) -> None:
+        config = PersistenceConfig(overwrite=True, compress=False)
+        backend = JsonPersistenceBackend(config=config)
+        assert backend.config.overwrite is True
+        assert backend.config.compress is False
+
+
+# ======================================================================
+# JsonPersistenceBackend — save to empty knowledge base
+# ======================================================================
+
+
+class TestJsonBackendSaveEmpty:
+    async def test_save_empty_kb(self, tmp_path: str, empty_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        result = await backend.save(tmp_path, empty_kb)
+        assert result.success is True
+        assert result.metadata["documents"] == 0
+        assert result.metadata["chunks"] == 0
+
+    async def test_save_empty_kb_file_created(self, tmp_path: str, empty_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, empty_kb)
+        assert os.path.exists(tmp_path)
+        assert os.path.getsize(tmp_path) > 0
+
+    async def test_save_empty_kb_json_structure(self, tmp_path: str, empty_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, empty_kb)
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert data["version"] == 1
+        assert data["documents"] == []
+        assert data["chunks"] == []
+        assert "embeddings" in data
+        assert "vectors" in data
+        assert "metadata" in data
+
+    async def test_save_empty_kb_metadata(self, tmp_path: str, empty_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        result = await backend.save(tmp_path, empty_kb)
+        meta = result.metadata
+        assert "path" in meta
+        assert "size_bytes" in meta
+        assert meta["size_bytes"] > 0
+        assert "elapsed_time" in meta
+        assert meta["elapsed_time"] >= 0
+
+
+# ======================================================================
+# JsonPersistenceBackend — save populated knowledge base
+# ======================================================================
+
+
+class TestJsonBackendSavePopulated:
+    async def test_save_populated_kb(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        result = await backend.save(tmp_path, populated_kb)
+        assert result.success is True
+        assert result.metadata["documents"] == 1
+        assert result.metadata["chunks"] == 2
+
+    async def test_save_populated_kb_json(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, populated_kb)
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert len(data["documents"]) == 1
+        assert len(data["chunks"]) == 2
+        assert data["documents"][0]["document_id"] == "doc_1"
+        assert data["chunks"][0]["chunk_id"] == "doc_1:0"
+        assert data["chunks"][1]["chunk_id"] == "doc_1:1"
+
+    async def test_save_populated_kb_content(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, populated_kb)
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        chunk = data["chunks"][0]
+        assert chunk["content"] == "Paris is the capital of France."
+        assert chunk["index"] == 0
+
+    async def test_save_populated_kb_metadata(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        result = await backend.save(tmp_path, populated_kb)
+        meta = result.metadata
+        assert meta["documents"] == 1
+        assert meta["chunks"] == 2
+
+
+# ======================================================================
+# JsonPersistenceBackend — unicode
+# ======================================================================
+
+
+class TestJsonBackendUnicode:
+    async def test_save_unicode(self, tmp_path: str) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk, KnowledgeMetadata
+
+        kb = KnowledgeBase()
+        doc = KnowledgeDocument(
+            document_id="uni",
+            title="Unicode Test",
+            content="东京是日本的首都。Paris est la capitale de la France.",
+            chunks=(
+                KnowledgeChunk(
+                    chunk_id="uni:0",
+                    document_id="uni",
+                    content="东京是日本的首都。",
+                    index=0,
+                ),
+            ),
+        )
+        kb.register(doc)
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        result = await backend.save(tmp_path, kb)
+        assert result.success is True
+
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert "东京" in data["chunks"][0]["content"]
+
+    async def test_unicode_stats(self, tmp_path: str) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+
+        kb = KnowledgeBase()
+        doc = KnowledgeDocument(
+            document_id="u2",
+            title="日本語",
+            content="日本語のテスト",
+            chunks=(
+                KnowledgeChunk(chunk_id="u2:0", document_id="u2", content="日本語のテスト", index=0),
+            ),
+        )
+        kb.register(doc)
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        result = await backend.save(tmp_path, kb)
+        assert result.metadata["documents"] == 1
+        assert result.metadata["chunks"] == 1
+
+
+# ======================================================================
+# JsonPersistenceBackend — overwrite protection
+# ======================================================================
+
+
+class TestJsonBackendOverwrite:
+    async def test_overwrite_protection(self, tmp_path: str, empty_kb: Any) -> None:
+        backend = JsonPersistenceBackend()  # overwrite=False
+        with open(tmp_path, "w") as f:
+            f.write("existing")
+        with pytest.raises(PersistenceError) as exc:
+            await backend.save(tmp_path, empty_kb)
+        assert "already exists" in str(exc.value)
+
+    async def test_overwrite_allowed(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        # Write once, then overwrite
+        result1 = await backend.save(tmp_path, populated_kb)
+        assert result1.success is True
+        result2 = await backend.save(tmp_path, populated_kb)
+        assert result2.success is True
+
+    async def test_overwrite_allowed_file_updated(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, populated_kb)
+        # Write again with different data
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument
+
+        kb2 = KnowledgeBase()
+        doc2 = KnowledgeDocument(document_id="new", title="New", content="New content.")
+        # Manually add without chunking
+        from app.rag.models import KnowledgeChunk
+        doc2_with_chunks = KnowledgeDocument(
+            document_id="new", title="New", content="New content.",
+            chunks=(KnowledgeChunk(chunk_id="new:0", document_id="new", content="New content.", index=0),),
+        )
+        kb2.register(doc2_with_chunks)
+
+        await backend.save(tmp_path, kb2)
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert data["documents"][0]["document_id"] == "new"
+
+
+# ======================================================================
+# JsonPersistenceBackend — deterministic output
+# ======================================================================
+
+
+class TestJsonBackendDeterministic:
+    async def test_deterministic_output(self, tmp_path: str, populated_kb: Any) -> None:
+        cfg = PersistenceConfig(overwrite=True)
+        backend = JsonPersistenceBackend(config=cfg)
+        await backend.save(tmp_path, populated_kb)
+        with open(tmp_path, encoding="utf-8") as f:
+            first = json.load(f)
+
+        # Save again with overwrite
+        await backend.save(tmp_path, populated_kb)
+        with open(tmp_path, encoding="utf-8") as f:
+            second = json.load(f)
+
+        # Documents and chunks should be identical (timestamps will differ)
+        assert first["version"] == second["version"]
+        assert first["documents"] == second["documents"]
+        assert first["chunks"] == second["chunks"]
+        assert first["metadata"]["document_count"] == second["metadata"]["document_count"]
+        assert first["metadata"]["chunk_count"] == second["metadata"]["chunk_count"]
+
+    async def test_sorted_keys(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, populated_kb)
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        # Python dicts preserve insertion order, but json.dumps(sort_keys=True)
+        # should have sorted top-level keys
+        keys = list(data.keys())
+        # version comes first, then documents, chunks, etc (alphabetically)
+        assert keys == sorted(keys)
+
+
+# ======================================================================
+# JsonPersistenceBackend — stats
+# ======================================================================
+
+
+class TestJsonBackendStats:
+    async def test_stats_after_save(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, populated_kb)
+        stats = await backend.stats(tmp_path)
+        assert stats.documents == 1
+        assert stats.chunks == 2
+        assert stats.size_bytes > 0
+
+    async def test_stats_empty_kb(self, tmp_path: str, empty_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, empty_kb)
+        stats = await backend.stats(tmp_path)
+        assert stats.documents == 0
+        assert stats.chunks == 0
+        assert stats.size_bytes > 0
+
+    async def test_stats_before_save_raises(self, tmp_path: str) -> None:
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError):
+            await backend.stats(tmp_path)
+
+
+# ======================================================================
+# JsonPersistenceBackend — exists / delete
+# ======================================================================
+
+
+class TestJsonBackendExists:
+    async def test_exists_after_save(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        assert await backend.exists(tmp_path) is False
+        await backend.save(tmp_path, populated_kb)
+        assert await backend.exists(tmp_path) is True
+
+    async def test_delete(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, populated_kb)
+        result = await backend.delete(tmp_path)
+        assert result.success is True
+        assert await backend.exists(tmp_path) is False
+
+    async def test_delete_not_found(self, tmp_path: str) -> None:
+        backend = JsonPersistenceBackend()
+        result = await backend.delete(tmp_path)
+        assert result.success is False
+        assert result.metadata["reason"] == "not_found"
+
+
+# ======================================================================
+# JsonPersistenceBackend — non-KnowledgeBase data
+# ======================================================================
+
+
+class TestJsonBackendInvalidData:
+    async def test_save_non_kb_raises(self, tmp_path: str) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        with pytest.raises(PersistenceError, match="KnowledgeBase instance"):
+            await backend.save(tmp_path, {"not": "a knowledge base"})
+
+    async def test_save_none_raises(self, tmp_path: str) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        with pytest.raises(PersistenceError, match="KnowledgeBase instance"):
+            await backend.save(tmp_path, None)  # type: ignore[arg-type]
+
+
+# ======================================================================
+# JsonPersistenceBackend — embeddings configuration
+# ======================================================================
+
+
+class TestJsonBackendEmbeddings:
+    async def test_include_embeddings(self, tmp_path: str, kb_with_embeddings: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True, include_embeddings=True),
+        )
+        result = await backend.save(tmp_path, kb_with_embeddings)
+        assert result.metadata["embeddings"] == 1
+
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert len(data["embeddings"]) == 1
+        assert data["embeddings"][0]["chunk_id"] == "emb_doc:0"
+        assert len(data["embeddings"][0]["vector"]) == 4
+
+    async def test_exclude_embeddings(self, tmp_path: str, kb_with_embeddings: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True, include_embeddings=False),
+        )
+        result = await backend.save(tmp_path, kb_with_embeddings)
+        assert result.metadata["embeddings"] == 0
+
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert "embeddings" not in data
+
+
+# ======================================================================
+# JsonPersistenceBackend — vectors configuration
+# ======================================================================
+
+
+class TestJsonBackendVectors:
+    async def test_include_vectors(self, tmp_path: str, kb_with_vectors: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True, include_vectors=True),
+        )
+        result = await backend.save(tmp_path, kb_with_vectors)
+        assert result.metadata["vectors"] == 1
+
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert len(data["vectors"]) == 1
+        assert data["vectors"][0]["chunk_id"] == "vec_doc:0"
+
+    async def test_exclude_vectors(self, tmp_path: str, kb_with_vectors: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True, include_vectors=False),
+        )
+        result = await backend.save(tmp_path, kb_with_vectors)
+        assert result.metadata["vectors"] == 0
+
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert "vectors" not in data
+
+
+# ======================================================================
+# JsonPersistenceBackend — load stub
+# ======================================================================
+
+
+class TestJsonBackendLoad:
+    async def test_load_not_implemented(self, tmp_path: str) -> None:
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError, match="not implemented"):
+            await backend.load(tmp_path)
