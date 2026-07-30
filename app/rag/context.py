@@ -10,16 +10,22 @@ from typing import Any
 
 from app.rag.knowledge_base import KnowledgeBase
 from app.rag.models import (
+    KnowledgeChunk,
     KnowledgeContext,
     KnowledgeDocument,
     KnowledgeQuery,
     KnowledgeResult,
+    KnowledgeSource,
 )
 from app.rag.retriever import KnowledgeRetriever
 
 
 class KnowledgeContextBuilder:
     """Retrieves knowledge and formats it for provider injection.
+
+    Uses hybrid retrieval when the knowledge base has both an embedding
+    provider and a vector store configured; otherwise falls back to
+    keyword retrieval.
 
     Usage::
 
@@ -48,6 +54,10 @@ class KnowledgeContextBuilder:
     ) -> KnowledgeContext:
         """Retrieve and format knowledge for provider context.
 
+        When the underlying ``KnowledgeBase`` has both an embedding
+        provider and a vector store configured, hybrid retrieval is
+        used automatically.  Otherwise keyword retrieval is used.
+
         Args:
             query: The search query.
             max_chunks: Maximum chunks to include.
@@ -60,12 +70,27 @@ class KnowledgeContextBuilder:
         if not self._retriever or not query:
             return KnowledgeContext()
 
+        # Auto-detect hybrid retriever when available
+        hybrid = getattr(self._kb, "hybrid_retriever", None) if self._kb else None
+
+        if hybrid is not None:
+            return await self._build_hybrid(hybrid, query, max_chunks)
+
+        return await self._build_keyword(query, max_chunks, min_score)
+
+    async def _build_keyword(
+        self,
+        query: str,
+        max_chunks: int,
+        min_score: float,
+    ) -> KnowledgeContext:
+        """Build context using keyword retrieval."""
         kg_query = KnowledgeQuery(
             query=query,
             max_results=max_chunks,
             min_score=min_score,
         )
-        result = await self._retriever.retrieve(kg_query)
+        result = await self._retriever.retrieve(kg_query)  # type: ignore[union-attr]
 
         if not result.chunks:
             return KnowledgeContext(total_chunks=0)
@@ -77,6 +102,45 @@ class KnowledgeContextBuilder:
             chunks=result.chunks,
             sources=result.sources,
             total_chunks=len(result.chunks),
+        )
+
+    async def _build_hybrid(
+        self,
+        hybrid: Any,
+        query: str,
+        max_chunks: int,
+    ) -> KnowledgeContext:
+        """Build context using hybrid retrieval, then map to KnowledgeChunks."""
+        hy_result = await hybrid.retrieve(query, top_k=max_chunks)
+
+        if not hy_result.results:
+            return KnowledgeContext(total_chunks=0)
+
+        chunks: list[KnowledgeChunk] = []
+        sources: list[KnowledgeSource] = []
+
+        for rs in hy_result.results:
+            chunk = self._kb.get_chunk(rs.chunk_id) if self._kb else None  # type: ignore[union-attr]
+            if chunk is None:
+                continue
+
+            chunks.append(chunk)
+
+            doc = self._kb.get(chunk.document_id) if self._kb else None  # type: ignore[union-attr]
+            sources.append(KnowledgeSource(
+                document_id=chunk.document_id,
+                chunk_id=chunk.chunk_id,
+                title=doc.title if doc else "",
+                score=rs.final_score,
+            ))
+
+        text = self._format_chunks(chunks)
+
+        return KnowledgeContext(
+            text=text,
+            chunks=chunks,
+            sources=sources,
+            total_chunks=len(chunks),
         )
 
     @staticmethod

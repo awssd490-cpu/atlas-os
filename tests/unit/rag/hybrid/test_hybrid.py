@@ -26,6 +26,7 @@ from app.rag.hybrid.errors import HybridError as HybridError_Impl
 from app.rag.hybrid.models import HybridResult as HybridResult_Impl
 from app.rag.hybrid.models import RetrievalScore as RetrievalScore_Impl
 from app.rag.errors import KnowledgeError
+from app.rag.context import KnowledgeContextBuilder
 
 
 # ======================================================================
@@ -479,6 +480,125 @@ class TestDefaultHybridRetriever:
         assert "keyword_candidates" in meta
         assert "semantic_candidates" in meta
         assert "fusion_strategy" in meta
+
+
+# ======================================================================
+# KnowledgeBase hybird_retriever property
+# ======================================================================
+
+
+@pytest.fixture
+def hybrid_kb():
+    """Build KB with pre-chunked+embedded data.
+
+    Uses the provider's synchronous _generate method to avoid
+    asyncio.run() inside async tests.
+    """
+    from app.rag.knowledge_base import KnowledgeBase
+    from app.rag.embeddings import DeterministicEmbeddingProvider, EmbeddingConfig as EConfig
+    from app.rag.vectorstore import MemoryVectorStore, VectorStoreConfig, SimilarityMetric
+    from app.rag.models import KnowledgeDocument, KnowledgeChunk
+
+    emb_config = EConfig(provider_name="det", dimensions=4, normalize_embeddings=True)
+    provider = DeterministicEmbeddingProvider(emb_config)
+    vs = MemoryVectorStore(config=VectorStoreConfig(metric=SimilarityMetric.COSINE))
+    kb = KnowledgeBase(embedding_provider=provider, vector_store=vs)
+
+    chunk1 = KnowledgeChunk(chunk_id="d1_s0", document_id="d1", index=0,
+                            content="Paris is the capital of France.")
+    chunk2 = KnowledgeChunk(chunk_id="d1_s1", document_id="d1", index=1,
+                            content="It has the Eiffel Tower.")
+    kb.register(KnowledgeDocument(document_id="d1", chunks=(chunk1, chunk2)))
+    for ch in (chunk1, chunk2):
+        vec = provider._generate(ch.content)
+        from app.rag.embeddings.models import EmbeddingVector
+        kb._embeddings[ch.chunk_id] = EmbeddingVector(
+            vector=vec, dimensions=len(vec), provider="det",
+        )
+        vs.add(ch.chunk_id, vec)
+    return kb
+
+
+class TestKnowledgeBaseHybridIntegration:
+    """Tests for kb.hybrid_retriever auto-detection."""
+
+    def test_hybrid_retriever_none_by_default(self):
+        from app.rag.knowledge_base import KnowledgeBase
+        kb = KnowledgeBase()
+        assert kb.hybrid_retriever is None
+
+    def test_hybrid_retriever_requires_both(self):
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.embeddings import DeterministicEmbeddingProvider, EmbeddingConfig as EConfig
+        from app.rag.vectorstore import MemoryVectorStore
+
+        emb_config = EConfig(provider_name="det", dimensions=4)
+        kb1 = KnowledgeBase(embedding_provider=DeterministicEmbeddingProvider(emb_config))
+        assert kb1.hybrid_retriever is None
+        kb2 = KnowledgeBase(vector_store=MemoryVectorStore())
+        assert kb2.hybrid_retriever is None
+        kb3 = KnowledgeBase(
+            embedding_provider=DeterministicEmbeddingProvider(emb_config),
+            vector_store=MemoryVectorStore(),
+        )
+        assert kb3.hybrid_retriever is not None
+
+    async def test_hybrid_retriever_works(self, hybrid_kb):
+        hybrid = hybrid_kb.hybrid_retriever
+        assert hybrid is not None
+        result = await hybrid.retrieve("capital", top_k=3)
+        assert len(result.results) > 0
+        assert result.metadata["semantic_candidates"] > 0
+
+
+# ======================================================================
+# ContextBuilder integration with hybrid
+# ======================================================================
+
+
+class TestContextBuilderHybrid:
+    """Context builder should auto-detect and use hybrid retrieval."""
+
+    async def test_context_builder_keyword_fallback(self):
+        """Without hybrid capabilities, builder uses keyword retrieval."""
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeChunk
+
+        kb = KnowledgeBase()
+        chunk = KnowledgeChunk(chunk_id="c1", content="Paris is the capital.")
+        from app.rag.models import KnowledgeDocument
+        kb.register(KnowledgeDocument(document_id="d1", chunks=(chunk,)))
+
+        builder = KnowledgeContextBuilder(kb)
+        context = await builder.build(query="capital", max_chunks=5)
+        assert context.total_chunks > 0
+
+    async def test_context_builder_hybrid_auto(self, hybrid_kb):
+        """Builder auto-uses hybrid when KB has embedding + vector store."""
+        builder = KnowledgeContextBuilder(hybrid_kb)
+        context = await builder.build(query="capital", max_chunks=5)
+        assert context.total_chunks > 0
+        assert len(context.text) > 0
+        assert len(context.sources) > 0
+
+    async def test_context_builder_hybrid_sources(self, hybrid_kb):
+        """Hybrid mode produces valid sources with document IDs."""
+        builder = KnowledgeContextBuilder(hybrid_kb)
+        context = await builder.build(query="Paris", max_chunks=5)
+        for source in context.sources:
+            assert source.document_id == "d1"
+            assert source.chunk_id != ""
+
+    async def test_context_builder_identical_output(self, hybrid_kb):
+        """Builder with same config returns deterministic results."""
+        builder = KnowledgeContextBuilder(hybrid_kb)
+        c1 = await builder.build(query="capital", max_chunks=5)
+        c2 = await builder.build(query="capital", max_chunks=5)
+        assert c1.text == c2.text
+        assert len(c1.chunks) == len(c2.chunks)
+        for s1, s2 in zip(c1.sources, c2.sources):
+            assert s1.chunk_id == s2.chunk_id
+            assert s1.score == s2.score
 
 
 # ======================================================================

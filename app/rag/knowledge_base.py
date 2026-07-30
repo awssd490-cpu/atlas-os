@@ -21,6 +21,7 @@ from app.rag.models import KnowledgeChunk, KnowledgeDocument
 if TYPE_CHECKING:
     from app.rag.embeddings.base import EmbeddingProvider
     from app.rag.embeddings.models import EmbeddingVector
+    from app.rag.hybrid.retriever import DefaultHybridRetriever
     from app.rag.vectorstore.base import VectorStore
 
 
@@ -80,6 +81,24 @@ class KnowledgeBase:
     def vector_store(self) -> VectorStore | None:
         """Return the vector store, or ``None`` if not configured."""
         return self._vector_store
+
+    @property
+    def hybrid_retriever(self) -> DefaultHybridRetriever | None:
+        """Return a :class:`DefaultHybridRetriever` if both an embedding
+        provider and a vector store are configured, otherwise ``None``.
+
+        The hybrid retriever is lazily constructed for each call and
+        is not cached — it reflects the current state of the knowledge
+        base.
+        """
+        if self._embedding_provider is not None and self._vector_store is not None:
+            from app.rag.hybrid.retriever import DefaultHybridRetriever
+            from app.rag.retriever import KnowledgeRetriever
+            return DefaultHybridRetriever(
+                self,
+                KnowledgeRetriever(self),
+            )
+        return None
 
     # ------------------------------------------------------------------
     # Registration
