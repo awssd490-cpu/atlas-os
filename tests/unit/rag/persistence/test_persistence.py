@@ -938,12 +938,458 @@ class TestJsonBackendVectors:
 
 
 # ======================================================================
-# JsonPersistenceBackend — load stub
+# JsonPersistenceBackend — load tests
 # ======================================================================
 
 
 class TestJsonBackendLoad:
-    async def test_load_not_implemented(self, tmp_path: str) -> None:
+    """Basic load functionality."""
+
+    async def test_load_empty(self, tmp_path: str, empty_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, empty_kb)
+        result = await backend.load(tmp_path)
+        assert result.success is True
+        kb = result.metadata["knowledge_base"]
+        assert kb.count() == 0
+
+    async def test_load_populated(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, populated_kb)
+        result = await backend.load(tmp_path)
+        assert result.success is True
+        kb = result.metadata["knowledge_base"]
+        assert kb.count() == 1
+        doc = kb.get("doc_1")
+        assert doc is not None
+        assert doc.title == "Test Document"
+        assert len(doc.chunks) == 2
+
+    async def test_load_content_preserved(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, populated_kb)
+        result = await backend.load(tmp_path)
+        kb = result.metadata["knowledge_base"]
+        doc = kb.get("doc_1")
+        assert doc is not None
+        assert doc.content == "Paris is the capital of France. London is the capital of the UK."
+        assert doc.chunks[0].content == "Paris is the capital of France."
+        assert doc.chunks[1].content == "London is the capital of the UK."
+
+    async def test_load_metadata(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, populated_kb)
+        result = await backend.load(tmp_path)
+        meta = result.metadata
+        assert meta["documents"] == 1
+        assert meta["chunks"] == 2
+        assert meta["size_bytes"] > 0
+
+    async def test_load_file_not_found(self, tmp_path: str) -> None:
         backend = JsonPersistenceBackend()
-        with pytest.raises(PersistenceError, match="not implemented"):
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load("/nonexistent/path.json")
+        assert "does not exist" in str(exc.value)
+
+    async def test_load_empty_string_path(self) -> None:
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError):
+            await backend.load("")
+
+
+class TestJsonBackendLoadUnicode:
+    """Load preserves unicode content."""
+
+    async def test_load_unicode(self, tmp_path: str) -> None:
+        from app.rag.knowledge_base import KnowledgeBase
+        from app.rag.models import KnowledgeDocument, KnowledgeChunk
+
+        kb = KnowledgeBase()
+        doc = KnowledgeDocument(
+            document_id="u1",
+            title="日本語",
+            content="东京是日本的首都。",
+            chunks=(
+                KnowledgeChunk(chunk_id="u1:0", document_id="u1", content="东京是日本的首都。", index=0),
+            ),
+        )
+        kb.register(doc)
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, kb)
+        result = await backend.load(tmp_path)
+        kb2 = result.metadata["knowledge_base"]
+        loaded = kb2.get("u1")
+        assert loaded is not None
+        assert "东京" in loaded.content
+        assert "东京" in loaded.chunks[0].content
+
+
+class TestJsonBackendLoadValidation:
+    """Load validates file content."""
+
+    async def test_invalid_json(self, tmp_path: str) -> None:
+        with open(tmp_path, "w") as f:
+            f.write("not json")
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError) as exc:
             await backend.load(tmp_path)
+        assert "Failed to parse" in str(exc.value)
+
+    async def test_unsupported_version(self, tmp_path: str) -> None:
+        import json
+        with open(tmp_path, "w") as f:
+            json.dump({"version": 999, "documents": [], "chunks": []}, f)
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "Unsupported" in str(exc.value)
+        assert "999" in str(exc.value)
+
+    async def test_missing_version(self, tmp_path: str) -> None:
+        import json
+        with open(tmp_path, "w") as f:
+            json.dump({"documents": [], "chunks": []}, f)
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "version" in str(exc.value)
+
+    async def test_missing_documents(self, tmp_path: str) -> None:
+        import json
+        with open(tmp_path, "w") as f:
+            json.dump({"version": 1, "chunks": []}, f)
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "documents" in str(exc.value)
+
+    async def test_missing_chunks(self, tmp_path: str) -> None:
+        import json
+        with open(tmp_path, "w") as f:
+            json.dump({"version": 1, "documents": []}, f)
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "chunks" in str(exc.value)
+
+    async def test_version_not_int(self, tmp_path: str) -> None:
+        import json
+        with open(tmp_path, "w") as f:
+            json.dump({"version": "one", "documents": [], "chunks": []}, f)
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "Unsupported" in str(exc.value)
+
+    async def test_documents_not_list(self, tmp_path: str) -> None:
+        import json
+        with open(tmp_path, "w") as f:
+            json.dump({"version": 1, "documents": "not a list", "chunks": []}, f)
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "documents" in str(exc.value).lower()
+
+    async def test_chunks_not_list(self, tmp_path: str) -> None:
+        import json
+        with open(tmp_path, "w") as f:
+            json.dump({"version": 1, "documents": [], "chunks": "not a list"}, f)
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "chunks" in str(exc.value).lower()
+
+    async def test_root_not_object(self, tmp_path: str) -> None:
+        with open(tmp_path, "w") as f:
+            f.write("[]")
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "object" in str(exc.value).lower()
+
+
+class TestJsonBackendLoadDuplicates:
+    """Load rejects duplicate document_ids and chunk_ids."""
+
+    async def test_duplicate_document_id(self, tmp_path: str) -> None:
+        import json
+        payload = {
+            "version": 1,
+            "documents": [
+                {"document_id": "dup", "title": "A", "content": "A"},
+                {"document_id": "dup", "title": "B", "content": "B"},
+            ],
+            "chunks": [],
+        }
+        with open(tmp_path, "w") as f:
+            json.dump(payload, f)
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "Duplicate" in str(exc.value)
+        assert "dup" in str(exc.value)
+
+    async def test_duplicate_chunk_id(self, tmp_path: str) -> None:
+        import json
+        payload = {
+            "version": 1,
+            "documents": [],
+            "chunks": [
+                {"chunk_id": "c1", "document_id": "d1", "content": "A", "index": 0},
+                {"chunk_id": "c1", "document_id": "d2", "content": "B", "index": 1},
+            ],
+        }
+        with open(tmp_path, "w") as f:
+            json.dump(payload, f)
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "Duplicate" in str(exc.value)
+        assert "c1" in str(exc.value)
+
+
+class TestJsonBackendLoadMissingFields:
+    """Load validates required fields on chunks and documents."""
+
+    async def test_chunk_missing_chunk_id(self, tmp_path: str) -> None:
+        import json
+        payload = {
+            "version": 1,
+            "documents": [],
+            "chunks": [{"document_id": "d1", "content": "A", "index": 0}],
+        }
+        with open(tmp_path, "w") as f:
+            json.dump(payload, f)
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "chunk_id" in str(exc.value)
+
+    async def test_chunk_missing_document_id(self, tmp_path: str) -> None:
+        import json
+        payload = {
+            "version": 1,
+            "documents": [],
+            "chunks": [{"chunk_id": "c1", "content": "A", "index": 0}],
+        }
+        with open(tmp_path, "w") as f:
+            json.dump(payload, f)
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "document_id" in str(exc.value)
+
+    async def test_document_missing_document_id(self, tmp_path: str) -> None:
+        import json
+        payload = {
+            "version": 1,
+            "documents": [{"title": "No ID", "content": "Missing ID"}],
+            "chunks": [],
+        }
+        with open(tmp_path, "w") as f:
+            json.dump(payload, f)
+        backend = JsonPersistenceBackend()
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "document_id" in str(exc.value)
+
+
+class TestJsonBackendLoadCorruptedReferences:
+    """Load rejects embeddings/vectors referencing unknown chunks."""
+
+    async def test_embedding_unknown_chunk(self, tmp_path: str, populated_kb: Any) -> None:
+        import json
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, populated_kb)
+        # Inject a bad embedding reference
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        data["embeddings"] = [{"chunk_id": "nonexistent", "vector": [0.1], "dimensions": 1}]
+        with open(tmp_path, "w") as f:
+            json.dump(data, f)
+
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "unknown chunk" in str(exc.value)
+
+    async def test_vector_unknown_chunk(self, tmp_path: str, populated_kb: Any) -> None:
+        import json
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, populated_kb)
+        # Inject a bad vector reference
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        data["vectors"] = [{"chunk_id": "nonexistent", "vector": [0.1]}]
+        with open(tmp_path, "w") as f:
+            json.dump(data, f)
+
+        with pytest.raises(PersistenceError) as exc:
+            await backend.load(tmp_path)
+        assert "unknown chunk" in str(exc.value)
+
+    async def test_chunk_orphan_without_document(self, tmp_path: str) -> None:
+        import json
+        payload = {
+            "version": 1,
+            "documents": [],
+            "chunks": [{"chunk_id": "orphan", "document_id": "missing_doc", "content": "X", "index": 0}],
+        }
+        with open(tmp_path, "w") as f:
+            json.dump(payload, f)
+        backend = JsonPersistenceBackend()
+        # Orphan chunks are gracefully ignored (they simply won't be
+        # attached to any document in the KB)
+        result = await backend.load(tmp_path)
+        assert result.success is True
+
+
+class TestJsonBackendLoadRestoreEmbeddings:
+    """Load restores embeddings when present."""
+
+    async def test_embeddings_restored(self, tmp_path: str, kb_with_embeddings: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True, include_embeddings=True),
+        )
+        await backend.save(tmp_path, kb_with_embeddings)
+        result = await backend.load(tmp_path)
+        kb = result.metadata["knowledge_base"]
+        vec = kb.get_embedding("emb_doc:0")
+        assert vec is not None
+        assert len(vec.vector) == 4
+        assert vec.provider == "det"
+
+    async def test_embeddings_not_present(self, tmp_path: str, populated_kb: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True, include_embeddings=True),
+        )
+        await backend.save(tmp_path, populated_kb)
+        result = await backend.load(tmp_path)
+        kb = result.metadata["knowledge_base"]
+        # No embeddings were saved for populated_kb
+        assert kb.list_embeddings() == []
+
+    async def test_embeddings_not_in_file(self, tmp_path: str, kb_with_embeddings: Any) -> None:
+        """Load succeeds even when embeddings were excluded from save."""
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True, include_embeddings=False),
+        )
+        await backend.save(tmp_path, kb_with_embeddings)
+        result = await backend.load(tmp_path)
+        assert result.success is True
+
+
+class TestJsonBackendLoadRestoreVectors:
+    """Load restores vector store when present."""
+
+    async def test_vectors_restored(self, tmp_path: str, kb_with_vectors: Any) -> None:
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True, include_vectors=True),
+        )
+        await backend.save(tmp_path, kb_with_vectors)
+        result = await backend.load(tmp_path)
+        kb = result.metadata["knowledge_base"]
+        vs = kb.vector_store
+        assert vs is not None
+        assert vs.count() == 1
+        assert vs.contains("vec_doc:0")
+
+    async def test_vectors_not_in_file(self, tmp_path: str, kb_with_vectors: Any) -> None:
+        """Load succeeds even when vectors were excluded from save."""
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True, include_vectors=False),
+        )
+        await backend.save(tmp_path, kb_with_vectors)
+        result = await backend.load(tmp_path)
+        kb = result.metadata["knowledge_base"]
+        assert kb.vector_store is None
+
+
+class TestJsonBackendLoadRoundTrip:
+    """Save → load → save produces identical output."""
+
+    async def test_round_trip_empty(self, tmp_path: str, empty_kb: Any) -> None:
+        import json
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, empty_kb)
+        r = await backend.load(tmp_path)
+        kb2 = r.metadata["knowledge_base"]
+        # Re-save to same path (overwrite=True)
+        await backend.save(tmp_path, kb2)
+
+        # Save was round-tripped — contents should be equivalent
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert data["version"] == 1
+        assert data["documents"] == []
+        assert data["metadata"]["document_count"] == 0
+
+    async def test_round_trip_populated(
+        self, tmp_path: str, populated_kb: Any
+    ) -> None:
+        import json
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, populated_kb)
+        r = await backend.load(tmp_path)
+        kb2 = r.metadata["knowledge_base"]
+        # Load → save should preserve content
+        await backend.save(tmp_path, kb2)
+
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert data["version"] == 1
+        assert len(data["documents"]) == 1
+        assert len(data["chunks"]) == 2
+        assert data["documents"][0]["document_id"] == "doc_1"
+
+    async def test_round_trip_with_embeddings(
+        self, tmp_path: str, kb_with_embeddings: Any
+    ) -> None:
+        import json
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True, include_embeddings=True),
+        )
+        await backend.save(tmp_path, kb_with_embeddings)
+        r = await backend.load(tmp_path)
+        kb2 = r.metadata["knowledge_base"]
+        await backend.save(tmp_path, kb2)
+
+        with open(tmp_path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert data["version"] == 1
+        assert len(data["documents"]) == 1
+        assert len(data.get("embeddings", [])) == 1
+
+    async def test_deterministic_round_trip(self, tmp_path: str, populated_kb: Any) -> None:
+        """Loading from the same file twice yields equivalent state."""
+        backend = JsonPersistenceBackend(
+            config=PersistenceConfig(overwrite=True),
+        )
+        await backend.save(tmp_path, populated_kb)
+
+        r1 = await backend.load(tmp_path)
+        r2 = await backend.load(tmp_path)
+
+        kb1 = r1.metadata["knowledge_base"]
+        kb2 = r2.metadata["knowledge_base"]
+
+        assert kb1.count() == kb2.count()
+        assert kb1.get("doc_1").title == kb2.get("doc_1").title
+        assert len(kb1.get("doc_1").chunks) == len(kb2.get("doc_1").chunks)
