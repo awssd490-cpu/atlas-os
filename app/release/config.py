@@ -15,7 +15,7 @@ class ReleaseConfig:
 
     Attributes:
         project_name: The package/project name used to resolve the
-            installed version.  Default ``"atlas"``.
+            installed version.  Default ``"tekvora-atlas"``.
         version_source: Where the authoritative version is read from —
             ``"package"`` (importlib.metadata) or ``"pyproject"``
             (``pyproject.toml``).  Default ``"package"``.
@@ -28,7 +28,7 @@ class ReleaseConfig:
             Default ``"dist"``.
     """
 
-    project_name: str = "atlas"
+    project_name: str = "tekvora-atlas"
     version_source: str = "package"
     pyproject_path: str = "pyproject.toml"
     changelog_path: str = "CHANGELOG.md"

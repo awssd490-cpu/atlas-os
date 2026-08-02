@@ -248,7 +248,7 @@ def _get_version() -> str:
     """Try to get version from package metadata, fallback to 'dev'."""
     try:
         from importlib.metadata import version
-        return version("atlas")
+        return version("tekvora-atlas")
     except (ImportError, Exception):
         return "dev"
 

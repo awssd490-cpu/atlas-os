@@ -242,8 +242,8 @@ python tools/atlas_cli.py release-version
 Example output:
 
 ```text
-Atlas version 0.11.0
-Tag:          v0.11.0
+Atlas version 1.0.0
+Tag:          v1.0.0
 ```
 
 ### `release-next`
@@ -257,9 +257,9 @@ python tools/atlas_cli.py release-next minor
 Example output:
 
 ```text
-Current: 0.11.0
+Current: 1.0.0
 Bump:    minor
-Next:    0.12.0
+Next:    1.1.0
 ```
 
 ### `release-changelog`
@@ -288,9 +288,9 @@ Example output:
 
 ```text
 Release artifacts:
-  wheel  atlas-0.11.0-py3-none-any.whl (310925 bytes)
+  wheel  tekvora_atlas-1.0.0-py3-none-any.whl (310925 bytes)
          sha256: 4dffd3e31925dcd6...
-  sdist  atlas-0.11.0.tar.gz (340945 bytes)
+  sdist  tekvora_atlas-1.0.0.tar.gz (340945 bytes)
          sha256: 16d13adf6d812143...
 
 [ok] All release artifacts validated.

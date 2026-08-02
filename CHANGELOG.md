@@ -5,14 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] — 2026-08-02
 
-### Planned for v1.0.0
+### Added
 
-- Stable API surface for all RAG components
-- Production-ready persistence layer
-- Comprehensive evaluation framework
-- Complete documentation suite
+- **Atlas v1.0 official stable release** — now distributed as `tekvora-atlas`
+- Release engineering subsystem (`app.release`)
+- CLI release commands: `release-version`, `release-next`, `release-changelog`, `release-check`
+- CI/CD and release automation (GitHub Actions, Dependabot, CODEOWNERS)
+- Project templates: minimal, rag_app, custom_provider
+
+### Changed
+
+- Package distribution renamed from `atlas` to `tekvora-atlas` to resolve a PyPI name conflict
+- Version bumped from `0.11.0` to `1.0.0` (official stable release)
+- Publisher metadata updated to Tekvora
+- Development Status classifier promoted from Alpha to Production/Stable
+- Snapshot listing falls back to insertion-order `rowid` so "newest first" is deterministic when timestamps tie
+- Release workflow publishes stable tags to PyPI via trusted publishing
+
+### Fixed
+
+- Deterministic snapshot ordering (`app/memory/snapshots.py`)
+- Stabilized the performance-profiler timing test with an event-loop warmup
 
 ## [0.12.0] — 2026-08-02
 

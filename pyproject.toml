@@ -3,24 +3,24 @@ requires = ["setuptools>=69.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "atlas"
-version = "0.11.0"
-description = "AI Operating System — modular framework for intelligent agents, memory, RAG, and workflows"
+name = "tekvora-atlas"
+version = "1.0.0"
+description = "Atlas (Tekvora) — AI Operating System, a modular framework for intelligent agents, memory, RAG, and workflows"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 authors = [
-    {name = "Atlas Contributors"},
+    {name = "Tekvora"},
 ]
 maintainers = [
-    {name = "Atlas Contributors"},
+    {name = "Tekvora"},
 ]
 keywords = [
-    "ai", "agent", "rag", "retrieval", "framework",
-    "llm", "knowledge-base", "embeddings", "vector-store",
+    "ai", "agent", "rag", "retrieval", "framework", "tekvora",
+    "llm", "knowledge-base", "embeddings", "vector-store", "atlas",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -42,10 +42,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/atlas"
-Repository = "https://github.com/your-org/atlas"
-Documentation = "https://github.com/your-org/atlas/tree/main/docs"
-Issues = "https://github.com/your-org/atlas/issues"
+Homepage = "https://github.com/awssd490-cpu/atlas-os"
+Repository = "https://github.com/awssd490-cpu/atlas-os"
+Documentation = "https://github.com/awssd490-cpu/atlas-os/tree/main/docs"
+Issues = "https://github.com/awssd490-cpu/atlas-os/issues"
 
 [project.optional-dependencies]
 dev = [

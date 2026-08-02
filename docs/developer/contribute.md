@@ -11,9 +11,9 @@
 ### One-time setup
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-org/atlas.git
-cd atlas
+# Clone the repository (currently private; use the Tekvora-provided access)
+git clone https://github.com/awssd490-cpu/atlas-os.git
+cd atlas-os
 
 # Create virtual environment
 python -m venv .venv

@@ -6,7 +6,7 @@
 # using trusted publishing (OIDC) — pre-release tags are not published so
 # release candidates stay out of the stable PyPI index.
 #
-# Tag format matches the existing history: `v0.11.0`, `v0.11.0-alpha`, etc.
+# Tag format matches the versioning scheme: `v1.0.0`, `v1.1.0-alpha`, etc.
 # A version tag also implies its `main` commit — the build below therefore
 # runs at the tagged commit.
 #

@@ -5,8 +5,10 @@ Thank you for your interest in contributing to Atlas!
 ## Development setup
 
 ```bash
-git clone https://github.com/your-org/atlas.git
-cd atlas
+# The repository is currently private; use the Tekvora-provided access
+# when it becomes public, then:
+git clone https://github.com/awssd490-cpu/atlas-os.git
+cd atlas-os
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"

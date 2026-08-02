@@ -150,13 +150,13 @@ class TestVersion:
         assert Version(1, 2, 3, "rc.1").tag == "v1.2.3-rc.1"
 
     def test_parse(self) -> None:
-        v = Version.parse("0.11.0")
-        assert (v.major, v.minor, v.patch) == (0, 11, 0)
+        v = Version.parse("1.0.0")
+        assert (v.major, v.minor, v.patch) == (1, 0, 0)
         assert v.prerelease == ""
 
     def test_parse_v_prefix(self) -> None:
-        v = Version.parse("v0.11.0-alpha")
-        assert (v.major, v.minor, v.patch) == (0, 11, 0)
+        v = Version.parse("v1.0.0-alpha")
+        assert (v.major, v.minor, v.patch) == (1, 0, 0)
         assert v.prerelease == "alpha"
 
     def test_parse_prerelease(self) -> None:
@@ -213,7 +213,7 @@ class TestBump:
 class TestReleaseConfig:
     def test_defaults(self) -> None:
         cfg = ReleaseConfig()
-        assert cfg.project_name == "atlas"
+        assert cfg.project_name == "tekvora-atlas"
         assert cfg.version_source == "package"
         assert cfg.dist_dir == "dist"
 
@@ -288,16 +288,16 @@ class TestChangelog:
 
 class TestArtifacts:
     def test_classify_wheel(self) -> None:
-        assert classify("atlas-0.11.0-py3-none-any.whl") == "wheel"
-        assert classify("atlas-0.11.0-py2.py3-none-any.whl") == "wheel"
+        assert classify("tekvora_atlas-1.0.0-py3-none-any.whl") == "wheel"
+        assert classify("tekvora_atlas-1.0.0-py2.py3-none-any.whl") == "wheel"
 
     def test_classify_sdist(self) -> None:
-        assert classify("atlas-0.11.0.tar.gz") == "sdist"
-        assert classify("atlas-0.11.0.zip") == "sdist"
+        assert classify("tekvora_atlas-1.0.0.tar.gz") == "sdist"
+        assert classify("tekvora_atlas-1.0.0.zip") == "sdist"
 
     def test_classify_other(self) -> None:
         assert classify("README.md") is None
-        assert classify("atlas-0.11.0.whl") is None
+        assert classify("tekvora_atlas-1.0.0.whl") is None
 
     def test_discover_missing_dir(self) -> None:
         with pytest.raises(ArtifactError):
@@ -307,20 +307,20 @@ class TestArtifacts:
         assert discover(str(tmp_path)) == ()
 
     def test_discover_filters_version(self, tmp_path: Path) -> None:
-        (tmp_path / "atlas-0.11.0-py3-none-any.whl").write_bytes(b"wheel-bytes")
-        (tmp_path / "atlas-0.11.0.tar.gz").write_bytes(b"sdist-bytes")
-        (tmp_path / "atlas-0.12.0-py3-none-any.whl").write_bytes(b"other")
+        (tmp_path / "tekvora_atlas-1.0.0-py3-none-any.whl").write_bytes(b"wheel-bytes")
+        (tmp_path / "tekvora_atlas-1.0.0.tar.gz").write_bytes(b"sdist-bytes")
+        (tmp_path / "tekvora_atlas-1.1.0-py3-none-any.whl").write_bytes(b"other")
         (tmp_path / "README.md").write_text("not an artifact")
 
         all_artifacts = discover(str(tmp_path))
         assert len(all_artifacts) == 3
 
-        filtered = discover(str(tmp_path), expected_version="0.11.0")
+        filtered = discover(str(tmp_path), expected_version="1.0.0")
         assert len(filtered) == 2
         assert {a.kind for a in filtered} == {"wheel", "sdist"}
 
     def test_discover_sha256(self, tmp_path: Path) -> None:
-        (tmp_path / "atlas-0.11.0.tar.gz").write_bytes(b"data")
+        (tmp_path / "tekvora_atlas-1.0.0.tar.gz").write_bytes(b"data")
         artifacts = discover(str(tmp_path))
         assert len(artifacts) == 1
         import hashlib
@@ -353,7 +353,7 @@ class TestReleaseService:
         assert service.config == ReleaseConfig()
 
     def test_current_version_from_package(self) -> None:
-        # The installed atlas distribution reports 0.11.0.
+        # The installed tekvora-atlas distribution reports the current version.
         service = ReleaseService()
         version = service.current_version()
         assert version.major >= 0
@@ -406,6 +406,14 @@ class TestReleaseService:
         artifacts = service.artifacts(expected_version="0.11.0")
         assert artifacts
         assert {a.kind for a in artifacts} == {"wheel", "sdist"}
+
+    def test_artifacts_discover_current_version(self) -> None:
+        # dist_test/ contains the Phase 12.2 built artifacts (0.11.0); the
+        # discovery filter is version-agnostic and returns whatever matches.
+        service = ReleaseService(ReleaseConfig(dist_dir="dist_test"))
+        all_artifacts = service.artifacts()
+        assert all_artifacts
+        assert {a.kind for a in all_artifacts} == {"wheel", "sdist"}
 
     def test_validate_artifacts(self) -> None:
         service = ReleaseService()

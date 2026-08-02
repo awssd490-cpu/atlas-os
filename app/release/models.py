@@ -14,7 +14,7 @@ from typing import Any
 
 # Semantic version: major.minor.patch, optionally with a pre-release
 # suffix such as ``-alpha``, ``-beta``, ``-rc.1`` (matches the project's
-# tag history: ``v0.11.0``, ``v0.11.0-alpha``, ``v0.7.5-alpha``).
+# tag history: ``v1.0.0``, ``v1.1.0-alpha``, ``v0.7.5-alpha``).
 _VERSION_PATTERN = re.compile(
     r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
     r"(?:-(?P<prerelease>[0-9A-Za-z.-]+))?$"
@@ -147,7 +147,7 @@ class ReleaseArtifact:
 
     Attributes:
         path: Absolute or relative path to the artifact file.
-        name: Base file name (e.g. ``atlas-0.11.0-py3-none-any.whl``).
+        name: Base file name (e.g. ``tekvora_atlas-1.0.0-py3-none-any.whl``).
         kind: Artifact kind — ``"wheel"`` or ``"sdist"``.
         size_bytes: File size in bytes.
         sha256: SHA-256 hex digest of the file contents.

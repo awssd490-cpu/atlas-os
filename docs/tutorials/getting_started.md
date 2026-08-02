@@ -15,11 +15,15 @@ No external ML dependencies required — Atlas uses the built-in `DeterministicE
 
 ### 1. Install Atlas
 
-Atlas is structured as a Python application. Clone the repository and install dependencies:
+Install Atlas from PyPI, or clone the repository (currently private; use the Tekvora-provided access) and install dependencies:
 
 ```bash
-git clone https://github.com/your-org/atlas.git
-cd atlas
+# From PyPI
+pip install tekvora-atlas
+
+# Or from source
+git clone https://github.com/awssd490-cpu/atlas-os.git
+cd atlas-os
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .

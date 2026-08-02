@@ -43,7 +43,10 @@ Application Layer
 ## Quick start
 
 ```bash
-# Install
+# Install from PyPI
+pip install tekvora-atlas
+
+# Or install from source (development)
 pip install -e ".[dev]"
 
 # Run the diagnostics
@@ -92,8 +95,9 @@ python app/main.py
 ## Development
 
 ```bash
-git clone https://github.com/your-org/atlas.git
-cd atlas
+# Clone the repository (currently private; use the Tekvora-provided access)
+git clone https://github.com/awssd490-cpu/atlas-os.git
+cd atlas-os
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"

@@ -26,8 +26,8 @@ A clear and concise description of what you expected to happen.
 
 - Python version: [e.g. 3.12.0]
 - OS: [e.g. Ubuntu 24.04, Windows 11, macOS 14]
-- Atlas version: [e.g. 0.11.0]
-- Installation method: [e.g. pip install -e ., pip install atlas]
+- Atlas version: [e.g. 1.0.0]
+- Installation method: [e.g. pip install -e ., pip install tekvora-atlas]
 
 ## Additional context
 

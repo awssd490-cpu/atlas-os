@@ -25,16 +25,16 @@ A `Version` has four components:
 | `patch` | Backward-compatible fixes | `0` |
 | `prerelease` | Optional pre-release qualifier | `alpha`, `rc.1` |
 
-Tags use the `v` prefix to match project history: `v0.11.0`, `v0.11.0-alpha`.
+Tags use the `v` prefix to match project history: `v1.0.0`, `v1.1.0-alpha`.
 
 ### Bump levels
 
-| Level | Effect | Example (`0.11.0`) |
+| Level | Effect | Example (`1.0.0`) |
 |---|---|---|
-| `patch` | Increment patch, drop prerelease | `0.11.1` |
-| `minor` | Increment minor, reset patch | `0.12.0` |
-| `major` | Increment major, reset minor+patch | `1.0.0` |
-| `prerelease` | Promote to `-alpha` or advance the qualifier | `0.11.0-alpha`, `0.11.0-alpha.1` |
+| `patch` | Increment patch, drop prerelease | `1.0.1` |
+| `minor` | Increment minor, reset patch | `1.1.0` |
+| `major` | Increment major, reset minor+patch | `2.0.0` |
+| `prerelease` | Promote to `-alpha` or advance the qualifier | `1.0.0-alpha`, `1.0.0-alpha.1` |
 
 ## Changelog
 
@@ -74,7 +74,7 @@ Run the CLI from the repository root so `app` is importable, or set
 
 ## Publishing
 
-Stable version tags (`v0.11.0`, no prerelease suffix) trigger the release
+Stable version tags (`v1.0.0`, no prerelease suffix) trigger the release
 workflow, which:
 
 1. Runs the full test suite.
@@ -83,7 +83,7 @@ workflow, which:
 4. Creates a GitHub Release with the artifacts attached.
 5. Publishes to PyPI using trusted publishing (OIDC) — **stable tags only**.
 
-Pre-release tags (`v0.11.0-alpha`) skip PyPI publishing so release candidates
+Pre-release tags (`v1.1.0-alpha`) skip PyPI publishing so release candidates
 stay out of the stable index.
 
 > **Note:** PyPI publishing requires a trusted publisher configured for this
