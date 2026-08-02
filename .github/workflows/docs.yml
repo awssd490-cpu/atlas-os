@@ -82,4 +82,7 @@ jobs:
 
       - name: Validate CLI --help
         run: |
-          python tools/atlas_cli.py --help >/dev/null
+          # The CLI shim delegates to app.cli.main, which lives in the
+          # repository root python package.  Run from the repo root so
+          # `app` is importable (as documented in docs/cli.md).
+          PYTHONPATH=. python tools/atlas_cli.py --help >/dev/null

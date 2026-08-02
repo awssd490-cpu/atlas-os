@@ -47,6 +47,9 @@ Repository = "https://github.com/awssd490-cpu/atlas-os"
 Documentation = "https://github.com/awssd490-cpu/atlas-os/tree/main/docs"
 Issues = "https://github.com/awssd490-cpu/atlas-os/issues"
 
+[project.scripts]
+atlas = "app.cli.main:main"
+
 [project.optional-dependencies]
 dev = [
     "black>=26.5.0",

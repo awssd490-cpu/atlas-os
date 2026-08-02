@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Development Status classifier promoted from Alpha to Production/Stable
 - Snapshot listing falls back to insertion-order `rowid` so "newest first" is deterministic when timestamps tie
 - Release workflow publishes stable tags to PyPI via trusted publishing
+- CLI is now installed as the `atlas` console script (entry point `app.cli.main:main`); `tools/atlas_cli.py` remains as a backward-compatible shim
 
 ### Fixed
 

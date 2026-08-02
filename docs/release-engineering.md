@@ -52,25 +52,30 @@ that no artifact is empty.
 
 ## CLI usage
 
+The CLI is installed as the `atlas` console script when `tekvora-atlas`
+is installed:
+
 ```bash
 # Show the current project version and its git tag
-python tools/atlas_cli.py release-version
+atlas release-version
 
 # Show the next version for a bump level (default: patch)
-python tools/atlas_cli.py release-next minor
+atlas release-next minor
 
 # Show the changelog entry for the current version
-python tools/atlas_cli.py release-changelog
+atlas release-changelog
 
 # Show the changelog entry for a specific version
-python tools/atlas_cli.py release-changelog --version 2.0.0
+atlas release-changelog --version 2.0.0
 
 # Validate built distribution artifacts in dist/
-python tools/atlas_cli.py release-check
+atlas release-check
 ```
 
-Run the CLI from the repository root so `app` is importable, or set
-`PYTHONPATH=.`.
+The same commands are available from the repository source via the
+`tools/atlas_cli.py` shim (run from the repository root so `app` is
+importable, or set `PYTHONPATH=.`): `python tools/atlas_cli.py
+release-version`, etc.
 
 ## Publishing
 

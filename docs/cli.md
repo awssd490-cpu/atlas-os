@@ -2,11 +2,21 @@
 
 ## Overview
 
-The Atlas CLI (`tools/atlas_cli.py`) provides developer-focused commands for inspecting the Atlas installation, diagnosing setup issues, validating configuration files, and planning releases.
+The Atlas CLI provides developer-focused commands for inspecting the Atlas installation, diagnosing setup issues, validating configuration files, and planning releases. It is installed as the `atlas` console script, and is also available from the repository source via `tools/atlas_cli.py` (a backward-compatible shim).
 
 ## Installation
 
-Run the CLI directly from the repository root:
+### Installed package (recommended)
+
+After `pip install tekvora-atlas`, the CLI is available as the `atlas` command:
+
+```bash
+atlas <command>
+```
+
+### From the repository source
+
+Run the CLI from the repository root:
 
 ```bash
 python tools/atlas_cli.py <command>
@@ -22,15 +32,15 @@ chmod +x tools/atlas_cli.py
 ## Usage
 
 ```bash
-python tools/atlas_cli.py --help
+atlas --help
 ```
 
 Output:
 
 ```text
-usage: atlas_cli.py [-h] {info,doctor,version,list-packages,list-providers,list-rerankers,list-vectorstores,validate-config,release-version,release-next,release-changelog,release-check} ...
+usage: atlas [-h] {info,doctor,version,list-packages,list-providers,list-rerankers,list-vectorstores,validate-config,release-version,release-next,release-changelog,release-check} ...
 
-Atlas CLI — developer tooling for the Atlas RAG framework.
+Atlas CLI — developer tooling for the Atlas framework.
 
 options:
   -h, --help            show this help message and exit
