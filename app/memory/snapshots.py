@@ -93,7 +93,12 @@ class SnapshotRepository:
         offset: int = 0,
     ) -> list[_SnapshotRow]:
         rows = await self._conn.fetchall(
-            "SELECT * FROM memory_snapshots ORDER BY created_at DESC, id DESC LIMIT :limit OFFSET :offset",
+            # `created_at` carries microsecond precision, so back-to-back
+            # snapshots can share an identical timestamp; fall back to the
+            # insertion-order rowid so "newest first" stays deterministic
+            # regardless of timestamp ties.
+            "SELECT * FROM memory_snapshots "
+            "ORDER BY created_at DESC, rowid DESC LIMIT :limit OFFSET :offset",
             {"limit": limit, "offset": offset},
         )
         return [_SnapshotRow(**r) for r in rows]

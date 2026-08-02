@@ -11,6 +11,10 @@ Usage:
     atlas list-rerankers    List available reranker implementations
     atlas list-vectorstores List available vector store implementations
     atlas validate-config   Validate a JSON configuration file
+    atlas release-version   Show the current project version
+    atlas release-next      Show the next version for a bump level
+    atlas release-changelog Show the changelog entry for a release
+    atlas release-check     Validate built distribution artifacts
 """
 
 import argparse
@@ -69,6 +73,38 @@ def main() -> None:
     )
     validate_parser.add_argument("file", help="Path to a JSON configuration file")
 
+    # release-version
+    subparsers.add_parser(
+        "release-version", help="Show the current project version"
+    )
+
+    # release-next
+    release_next_parser = subparsers.add_parser(
+        "release-next", help="Show the next version for a bump level"
+    )
+    release_next_parser.add_argument(
+        "level",
+        nargs="?",
+        default="patch",
+        choices=["major", "minor", "patch", "prerelease"],
+        help="Bump level (default: patch)",
+    )
+
+    # release-changelog
+    release_changelog_parser = subparsers.add_parser(
+        "release-changelog", help="Show the changelog entry for a release"
+    )
+    release_changelog_parser.add_argument(
+        "--version",
+        help="Version to describe (default: current project version)",
+    )
+
+    # release-check
+    subparsers.add_parser(
+        "release-check",
+        help="Validate built distribution artifacts in dist/",
+    )
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -84,11 +120,19 @@ def main() -> None:
         "list-rerankers": cmd_list_rerankers,
         "list-vectorstores": cmd_list_vectorstores,
         "validate-config": cmd_validate_config,
+        "release-version": cmd_release_version,
+        "release-next": cmd_release_next,
+        "release-changelog": cmd_release_changelog,
+        "release-check": cmd_release_check,
     }
 
     cmd = commands[args.command]
     if args.command == "validate-config":
         cmd(args.file)
+    elif args.command == "release-next":
+        cmd(args.level)
+    elif args.command == "release-changelog":
+        cmd(args.version)
     else:
         cmd()
 
@@ -339,6 +383,119 @@ def cmd_validate_config(file_path: str) -> None:
     except Exception as exc:
         print(f"[!!] Validation failed: {exc}")
         sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Command: release-version
+# ---------------------------------------------------------------------------
+
+def cmd_release_version() -> None:
+    """Show the current project version."""
+    try:
+        from app.release import ReleaseService
+    except ImportError:
+        print("[!!] app.release not available -- install the atlas package")
+        sys.exit(1)
+
+    try:
+        service = ReleaseService()
+        version = service.current_version()
+    except Exception as exc:
+        print(f"[!!] Could not resolve version: {exc}")
+        sys.exit(1)
+
+    print(f"Atlas version {version}")
+    print(f"Tag:          {version.tag}")
+    if version.is_prerelease:
+        print("Type:         pre-release")
+
+
+# ---------------------------------------------------------------------------
+# Command: release-next
+# ---------------------------------------------------------------------------
+
+def cmd_release_next(level: str = "patch") -> None:
+    """Show the next version for a bump level."""
+    try:
+        from app.release import ReleaseService
+    except ImportError:
+        print("[!!] app.release not available -- install the atlas package")
+        sys.exit(1)
+
+    try:
+        service = ReleaseService()
+        current = service.current_version()
+        next_version = service.next_version(level)
+    except Exception as exc:
+        print(f"[!!] Could not compute next version: {exc}")
+        sys.exit(1)
+
+    print(f"Current: {current}")
+    print(f"Bump:    {level}")
+    print(f"Next:    {next_version}")
+
+
+# ---------------------------------------------------------------------------
+# Command: release-changelog
+# ---------------------------------------------------------------------------
+
+def cmd_release_changelog(version: str | None = None) -> None:
+    """Show the changelog entry for a release."""
+    try:
+        from app.release import ReleaseService, Version, render_entry
+    except ImportError:
+        print("[!!] app.release not available -- install the atlas package")
+        sys.exit(1)
+
+    try:
+        service = ReleaseService()
+        target = service.current_version() if version is None else Version.parse(version)
+        entry = service.changelog_entry(version=target)
+    except Exception as exc:
+        print(f"[!!] Could not build changelog: {exc}")
+        sys.exit(1)
+
+    print(render_entry(entry), end="")
+
+
+# ---------------------------------------------------------------------------
+# Command: release-check
+# ---------------------------------------------------------------------------
+
+def cmd_release_check() -> None:
+    """Validate built distribution artifacts in dist/."""
+    try:
+        from app.release import ReleaseService
+    except ImportError:
+        print("[!!] app.release not available -- install the atlas package")
+        sys.exit(1)
+
+    try:
+        service = ReleaseService()
+        artifacts = service.artifacts()
+        problems = service.validate_artifacts(artifacts)
+    except Exception as exc:
+        print(f"[!!] Could not validate artifacts: {exc}")
+        sys.exit(1)
+
+    if not artifacts:
+        print("[!!] No distribution artifacts found in dist/")
+        print("    Run: python -m build")
+        sys.exit(1)
+
+    print("Release artifacts:")
+    for artifact in artifacts:
+        print(f"  {artifact.kind:<6} {artifact.name} ({artifact.size_bytes} bytes)")
+        print(f"         sha256: {artifact.sha256}")
+
+    if problems:
+        print()
+        for problem in problems:
+            print(f"[!!] {problem}")
+        sys.exit(1)
+
+    print()
+    print("[ok] All release artifacts validated.")
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive evaluation framework
 - Complete documentation suite
 
+## [0.12.0] — 2026-08-02
+
+### Added
+
+- Release engineering subsystem (`app.release`):
+  - `Version` model with semantic version parsing and bump levels
+  - Changelog construction and rendering (Keep a Changelog compatible)
+  - Distribution artifact discovery and SHA-256 validation
+  - `ReleaseService` orchestrating version → changelog → artifacts
+- CLI release commands: `release-version`, `release-next`, `release-changelog`, `release-check`
+- Release engineering documentation (`docs/release-engineering.md`)
+
+### Changed
+
+- Release workflow publishes stable tags to PyPI via trusted publishing
+- Snapshot listing now falls back to insertion-order `rowid` so "newest first" is deterministic when timestamps tie
+
+### Fixed
+
+- Deterministic snapshot ordering (`app/memory/snapshots.py`)
+- Stabilized the performance-profiler timing test with an event-loop warmup
+
 ## [0.11.0] — 2026-07-30
 
 ### Added

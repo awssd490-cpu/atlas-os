@@ -1531,6 +1531,10 @@ class TestPerformanceProfiler:
             import asyncio
             await asyncio.sleep(0.01)
 
+        # Warm up the event-loop timer with a real timed sleep (see
+        # docs/troubleshooting.md — the first timed await after loop start
+        # can under-measure on Windows ProactorEventLoop), then measure.
+        await profiler.profile(slow)
         fast_profile = await profiler.profile(fast)
         slow_profile = await profiler.profile(slow)
         assert slow_profile.execution_time_ms >= fast_profile.execution_time_ms

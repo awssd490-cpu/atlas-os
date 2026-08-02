@@ -2,20 +2,18 @@
 #
 # Triggered by version tags (`v*`).  Runs the full test suite, builds the
 # distributions, and creates a GitHub Release with the wheel and source
-# distribution attached.
-#
-# Publishing to PyPI is intentionally NOT wired up yet.  When the project
-# is ready, add a PyPI trusted-publishing step:
-#
-#   environment: pypi
-#   permissions:
-#     id-token: write
-#   - name: Publish to PyPI
-#     uses: pypa/gh-action-pypi-publish@release/v1
+# distribution attached.  Stable version tags are also published to PyPI
+# using trusted publishing (OIDC) — pre-release tags are not published so
+# release candidates stay out of the stable PyPI index.
 #
 # Tag format matches the existing history: `v0.11.0`, `v0.11.0-alpha`, etc.
 # A version tag also implies its `main` commit — the build below therefore
 # runs at the tagged commit.
+#
+# PyPI publishing requires a PyPI "trusted publisher" configured for this
+# repository:
+#   https://docs.pypi.org/trusted-publishers/adding-a-publisher/
+# The environment below must exist with the correct OIDC settings.
 
 name: release
 
@@ -82,3 +80,27 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Stable releases are published to the public PyPI index.  Pre-release
+    # tags (`-alpha`, `-beta`, `-rc`, ...) are skipped so candidates stay
+    # out of the stable index.
+    if: ${{ !contains(github.ref_name, '-') }}
+    environment: pypi
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: atlas-dist
+          path: dist/
+
+      - name: Publish to PyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

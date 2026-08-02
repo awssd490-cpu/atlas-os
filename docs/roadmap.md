@@ -222,6 +222,38 @@ This roadmap defines the milestones for building ATLAS. Each phase builds on the
 
 ---
 
+## Phase 12.3: Release Engineering
+
+**Versioning, changelog, and distribution publishing for releases.**
+
+- [x] `app/release` subsystem — version resolution, bumping, changelog, artifact validation
+- [x] `Version` model with semantic version parsing and bump levels (major/minor/patch/prerelease)
+- [x] Changelog construction and rendering (Keep a Changelog compatible)
+- [x] Distribution artifact discovery and integrity validation (wheel/sdist, SHA-256)
+- [x] ReleaseService orchestrating version → changelog → artifacts
+- [x] CLI commands: `release-version`, `release-next`, `release-changelog`, `release-check`
+- [x] PyPI trusted publishing wired into the release workflow (stable tags only)
+- [x] Release engineering documentation and CLI reference
+
+**Delivery:** Atlas releases are versioned consistently, documented with changelogs, validated for artifact integrity, and publishable to PyPI via trusted publishing.
+
+---
+
+## Phase 12.4: Final Validation
+
+**Release-readiness verification.**
+
+- [x] Full repository validation (package integrity, imports, public API, docs links, CLI, templates)
+- [x] All verification suites executed (tests, coverage, Ruff, build, twine, CLI, examples, templates)
+- [x] Repository structure audit — accidental artifacts removed, `.gitignore` hygiene
+- [x] Release-readiness checks (version, changelog, metadata, license, security, contribution files)
+- [x] Flaky-test stabilization (snapshot ordering, profiler timing)
+- [x] Release Readiness Report
+
+**Delivery:** Atlas v1.0 release readiness is verified and documented.
+
+---
+
 ## Current Status
 
 | Phase | Status | Target |
@@ -239,3 +271,5 @@ This roadmap defines the milestones for building ATLAS. Each phase builds on the
 | 11: Production | Planned | Q4 2027 |
 | 12: Ecosystem | Ongoing | 2028+ |
 | 12.2: CI/CD & Release Automation | **Complete** | Q3 2026 |
+| 12.3: Release Engineering | **Complete** | Q3 2026 |
+| 12.4: Final Validation | **Complete** | Q3 2026 |

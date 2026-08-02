@@ -16,6 +16,17 @@ dist_test/
 
 # Backups and scratch files
 phase12_2_backup.patch
+backup_phase_6_1/
+
+# Claude Code session/tooling state (not part of the distribution)
+.claude/
+docs/.claude/
+docs/api/.claude/
+docs/developer/.claude/
+
+# Runtime data and caches
+data/
+.ruff_cache/
 
 # Virtual environments
 .venv

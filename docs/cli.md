@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Atlas CLI (`tools/atlas_cli.py`) provides developer-focused commands for inspecting the Atlas installation, diagnosing setup issues, and validating configuration files.
+The Atlas CLI (`tools/atlas_cli.py`) provides developer-focused commands for inspecting the Atlas installation, diagnosing setup issues, validating configuration files, and planning releases.
 
 ## Installation
 
@@ -27,8 +27,8 @@ python tools/atlas_cli.py --help
 
 Output:
 
-```
-usage: atlas_cli.py [-h] {info,doctor,version,list-packages,list-providers,list-rerankers,list-vectorstores,validate-config} ...
+```text
+usage: atlas_cli.py [-h] {info,doctor,version,list-packages,list-providers,list-rerankers,list-vectorstores,validate-config,release-version,release-next,release-changelog,release-check} ...
 
 Atlas CLI — developer tooling for the Atlas RAG framework.
 
@@ -36,7 +36,7 @@ options:
   -h, --help            show this help message and exit
 
 Commands:
-  {info,doctor,version,list-packages,list-providers,list-rerankers,list-vectorstores,validate-config}
+  {info,doctor,version,list-packages,list-providers,list-rerankers,list-vectorstores,validate-config,release-version,release-next,release-changelog,release-check}
     info                Show system and package information
     doctor              Diagnose common setup issues
     version             Show version information
@@ -45,6 +45,10 @@ Commands:
     list-rerankers      List available reranker implementations
     list-vectorstores   List available vector store implementations
     validate-config     Validate a JSON configuration file
+    release-version     Show the current project version
+    release-next        Show the next version for a bump level
+    release-changelog   Show the changelog entry for a release
+    release-check       Validate built distribution artifacts in dist/
 ```
 
 ## Commands
@@ -59,7 +63,7 @@ python tools/atlas_cli.py info
 
 Example output:
 
-```
+```text
 ============================================================
 Atlas System Information
 ============================================================
@@ -87,7 +91,7 @@ python tools/atlas_cli.py doctor
 
 Example output:
 
-```
+```text
 ============================================================
 Atlas Doctor — Setup Diagnostics
 ============================================================
@@ -111,7 +115,7 @@ python tools/atlas_cli.py version
 
 Example output:
 
-```
+```text
 Atlas version dev
 Python 3.12.0 on win32
 ```
@@ -126,7 +130,7 @@ python tools/atlas_cli.py list-packages
 
 Example output:
 
-```
+```text
 Package                            Status     Description
 ---------------------------------------------------------------------------
 app.core.config                   ✅         Configuration management
@@ -155,7 +159,7 @@ python tools/atlas_cli.py list-providers
 
 Example output:
 
-```
+```text
 ============================================================
 Embedding Providers
 ============================================================
@@ -173,7 +177,7 @@ python tools/atlas_cli.py list-rerankers
 
 Example output:
 
-```
+```text
 ============================================================
 Reranker Implementations
 ============================================================
@@ -190,7 +194,7 @@ python tools/atlas_cli.py list-vectorstores
 
 Example output:
 
-```
+```text
 ============================================================
 Vector Store Implementations
 ============================================================
@@ -207,7 +211,7 @@ python tools/atlas_cli.py validate-config ./config.json
 
 Example output:
 
-```
+```text
 Validating: ./config.json
 
 ✅ Configuration is valid!
@@ -221,10 +225,75 @@ Validating: ./config.json
 
 On failure:
 
-```
+```text
 Validating: ./config.json
 
 ❌ Validation failed: Invalid environment: 'invalid'. Must be one of ('development', 'testing', 'staging', 'production')
+```
+
+### `release-version`
+
+Show the current project version, its git tag, and whether it is a pre-release.
+
+```bash
+python tools/atlas_cli.py release-version
+```
+
+Example output:
+
+```text
+Atlas version 0.11.0
+Tag:          v0.11.0
+```
+
+### `release-next`
+
+Show the next version for a bump level. The level is optional and defaults to `patch`.
+
+```bash
+python tools/atlas_cli.py release-next minor
+```
+
+Example output:
+
+```text
+Current: 0.11.0
+Bump:    minor
+Next:    0.12.0
+```
+
+### `release-changelog`
+
+Show the changelog entry for a release. Without `--version`, uses the current project version.
+
+```bash
+python tools/atlas_cli.py release-changelog --version 2.0.0
+```
+
+Example output:
+
+```text
+# 2.0.0
+```
+
+### `release-check`
+
+Validate the built distribution artifacts in `dist/`. Reports the kind, size, and SHA-256 of each artifact and fails if no artifacts are found or a required artifact kind is missing.
+
+```bash
+python tools/atlas_cli.py release-check
+```
+
+Example output:
+
+```text
+Release artifacts:
+  wheel  atlas-0.11.0-py3-none-any.whl (310925 bytes)
+         sha256: 4dffd3e31925dcd6...
+  sdist  atlas-0.11.0.tar.gz (340945 bytes)
+         sha256: 16d13adf6d812143...
+
+[ok] All release artifacts validated.
 ```
 
 ## Extending the CLI
