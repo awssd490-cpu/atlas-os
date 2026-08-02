@@ -49,7 +49,7 @@ Issues = "https://github.com/your-org/atlas/issues"
 
 [project.optional-dependencies]
 dev = [
-    "black>=26.5.0",
+    "black>=26.5.1",
     "build>=1.2.0",
     "coverage>=7.0",
     "isort>=7.0.0",
@@ -69,7 +69,7 @@ providers = [
 
 [dependency-groups]
 dev = [
-    "black>=26.5.0",
+    "black>=26.5.1",
     "build>=1.2.0",
     "coverage>=7.0",
     "isort>=7.0.0",
