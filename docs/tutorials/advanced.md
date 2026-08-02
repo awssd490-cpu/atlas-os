@@ -17,7 +17,7 @@ Explore advanced patterns: error handling, retry policies, health monitoring, co
 
 All Atlas errors inherit from `AtlasError`:
 
-```
+```text
 AtlasError
 ├── ConfigurationError
 │   └── InvalidConfiguration
@@ -66,6 +66,7 @@ AtlasError
 ```
 
 Every error has:
+
 - `message` — human-readable description
 - `code` — machine-readable identifier (e.g. `"INVALID_PIPELINE_CONFIGURATION"`)
 - `details` — structured dict with context

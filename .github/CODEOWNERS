@@ -1,0 +1,15 @@
+# Atlas code owners — required reviewers for pull requests.
+#
+# Pattern matching follows GitHub CODEOWNERS rules: each line is a path
+# pattern followed by the owners for matching files.  Replace the
+# placeholder handle with the actual maintainer(s).
+#
+# Global default: Atlas maintainers.
+* @atlas-maintainers
+
+# Core infrastructure and runtime live under app/.
+/app/ @atlas-maintainers
+
+# Distribution, packaging and CI/CD are owned by the release team.
+/pyproject.toml @atlas-maintainers
+/.github/ @atlas-maintainers

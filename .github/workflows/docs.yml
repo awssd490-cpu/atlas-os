@@ -1,0 +1,85 @@
+# Documentation validation for Atlas.
+#
+# Markdown is checked for broken links and undefined anchor targets, and
+# every documented example script is compile-checked.  The docs/ tree is
+# the project's documentation site — this keeps it from silently rotting.
+
+name: docs
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate docs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install markdownlint
+        run: npm install --global markdownlint-cli@0.42.0
+
+      - name: List changed Markdown files (pull requests only)
+        id: changed-md
+        if: github.event_name == 'pull_request'
+        run: |
+          mapfile -t files < <(
+            git diff --name-only "origin/${{ github.base_ref }}"...HEAD -- '*.md' \
+              || true
+          )
+          echo "count=${#files[@]}"
+          # Export as JSON so it survives between steps.
+          python -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${files[@]}" > /tmp/changed-md.json
+          echo "files_json=$(cat /tmp/changed-md.json)"
+        shell: bash
+
+      - name: Check Markdown (markdownlint)
+        # Project rules live in .markdownlint.json (line length 100, inline
+        # HTML for badges, non-H1 file starts).  Like Black/isort in
+        # lint.yml, only files changed in the pull request are checked —
+        # the wider docs tree is cleaned up incrementally, not swept.
+        # On push to main, markdownlint is not run; markdown-link-check
+        # below still validates the whole tree every run.
+        if: github.event_name == 'pull_request' && steps.changed-md.outputs.count != '0'
+        run: |
+          mapfile -t files < <(python -c 'import json; print("\n".join(json.load(open("/tmp/changed-md.json"))))')
+          markdownlint "${files[@]}"
+
+      - name: Check documentation integrity (markdown-link-check)
+        # `docs/**/*.md` is a markdown-link-check glob, not a shell glob, so
+        # let the shell expand it against the files that actually exist.
+        run: |
+          mapfile -t files < <(find docs -name '*.md' | sort)
+          echo "Checking ${#files[@]} documentation files."
+          npx --yes markdown-link-check@3.12.2 "${files[@]}"
+
+      - name: Validate documented examples compile
+        run: |
+          set -e
+          for f in examples/*.py; do
+            python -m py_compile "$f"
+          done
+          echo "Validated $(ls examples/*.py | wc -l) example scripts."
+
+      - name: Validate CLI --help
+        run: |
+          python tools/atlas_cli.py --help >/dev/null

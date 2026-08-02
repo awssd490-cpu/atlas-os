@@ -4,7 +4,7 @@ Extension template for implementing custom Atlas providers.
 
 ## Directory structure
 
-```
+```text
 custom_provider/
 ├── README.md
 ├── requirements.txt

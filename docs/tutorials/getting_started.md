@@ -37,6 +37,7 @@ log.info("Atlas initialized", version="1.0")
 ```
 
 Output (stderr):
+
 ```json
 {"level":"INFO","logger":"getting-started","message":"Atlas initialized","metadata":{"version":"1.0"},"timestamp":"2026-07-30T12:00:00+00:00"}
 ```
@@ -142,7 +143,7 @@ python examples/basic_rag.py
 
 ## Expected output
 
-```
+```text
 Registered 1 document
 Indexed 2 vectors
 Found 1 matches:

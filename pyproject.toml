@@ -49,9 +49,16 @@ Issues = "https://github.com/your-org/atlas/issues"
 
 [project.optional-dependencies]
 dev = [
+    "black>=26.5.0",
+    "build>=1.2.0",
+    "coverage>=7.0",
+    "isort>=7.0.0",
+    "mypy>=1.15.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
-    "coverage>=7.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.12.0",
+    "twine>=6.0.0",
 ]
 docs = [
 ]
@@ -62,9 +69,16 @@ providers = [
 
 [dependency-groups]
 dev = [
+    "black>=26.5.0",
+    "build>=1.2.0",
+    "coverage>=7.0",
+    "isort>=7.0.0",
+    "mypy>=1.15.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
-    "coverage>=7.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.12.0",
+    "twine>=6.0.0",
 ]
 
 [tool.pytest.ini_options]
@@ -81,3 +95,36 @@ fail_under = 80
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+# ---------------------------------------------------------------------------
+# Linting & formatting (Phase 12.2 — CI/CD)
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# Pragmatic rule set that matches the existing Atlas codebase.
+# Bug-catching rules only: Pyflakes (F) + the formatting checks that don't
+# require reformatting the current tree (E4, E7, E9).  Full strictness
+# (Black/isort normalization, unused imports, etc.) is adopted incrementally.
+select = ["E4", "E7", "E9", "F"]
+ignore = [
+    # Pre-existing findings, deliberately not fixed to avoid churning
+    # completed work.  Remove these ignores as the tree is cleaned up.
+    "E402",   # module import not at top of file (e.g. late `import uuid`)
+    "F401",   # unused import (re-export style `__init__.py`)
+    "F541",   # f-string missing placeholders
+    "F811",   # redefinition of unused name (local import shadows import)
+    "F821",   # undefined name (forward-reference under TYPE_CHECKING)
+    "F841",   # unused variable
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 100

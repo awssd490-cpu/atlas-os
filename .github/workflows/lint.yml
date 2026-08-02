@@ -1,0 +1,77 @@
+# Linting for Atlas.
+#
+# Ruff runs against the whole tree.  Black, isort and mypy run only on
+# files changed in the pull request — the existing tree predates formatter
+# adoption, so a full `--check` would fail on completed work.  New code is
+# formatted strictly; the rest is cleaned up incrementally.
+#
+# Ruff rules are curated in `pyproject.toml` to keep the current tree green.
+
+name: lint
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install development dependencies
+        run: pip install ".[dev]"
+
+      - name: List changed Python files (pull requests only)
+        id: changed
+        if: github.event_name == 'pull_request'
+        run: |
+          mapfile -t files < <(
+            git diff --name-only "origin/${{ github.base_ref }}"...HEAD -- '*.py' \
+              || true
+          )
+          echo "count=${#files[@]}"
+          # Export as JSON so it survives between steps.
+          python -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${files[@]}" > /tmp/changed-py.json
+          echo "files_json=$(cat /tmp/changed-py.json)"
+        shell: bash
+
+      - name: Check linting (Ruff)
+        run: ruff check app/ tests/ tools/ examples/ main.py
+
+      - name: Check formatting of changed files (Black)
+        if: github.event_name == 'pull_request' && steps.changed.outputs.count != '0'
+        run: |
+          mapfile -t files < <(python -c 'import json; print("\n".join(json.load(open("/tmp/changed-py.json"))))')
+          black --check --line-length 100 "${files[@]}"
+
+      - name: Check import sorting of changed files (isort)
+        if: github.event_name == 'pull_request' && steps.changed.outputs.count != '0'
+        run: |
+          mapfile -t files < <(python -c 'import json; print("\n".join(json.load(open("/tmp/changed-py.json"))))')
+          isort --check-only --profile black "${files[@]}"
+
+      - name: Type check changed files (mypy)
+        if: github.event_name == 'pull_request' && steps.changed.outputs.count != '0'
+        run: |
+          mapfile -t files < <(python -c 'import json; print("\n".join(json.load(open("/tmp/changed-py.json"))))')
+          mypy --ignore-missing-imports --follow-imports=skip "${files[@]}"

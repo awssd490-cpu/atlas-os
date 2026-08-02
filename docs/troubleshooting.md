@@ -10,6 +10,7 @@ PYTHONPATH=. python tools/atlas_cli.py doctor
 ```
 
 This checks:
+
 - Python version >= 3.12
 - Core package importability
 - Pytest availability
@@ -45,16 +46,19 @@ flowchart TD
 **Symptoms:** `ModuleNotFoundError: No module named 'app'`
 
 **Causes:**
+
 - Running Python from outside the repository root
 - Package not installed in development mode
 
 **Diagnostic:**
+
 ```bash
 pwd                    # should be /path/to/atlas
 python -c "import app" # should succeed
 ```
 
 **Solutions:**
+
 ```bash
 cd /path/to/atlas
 pip install -e .
@@ -67,6 +71,7 @@ pip install -e .
 **Causes:** The `app.core.log` package name shadows the stdlib `logging` module when not imported correctly.
 
 **Solutions:**
+
 ```python
 # Correct — import through the package
 from app.core.log import AtlasLogger
@@ -77,15 +82,17 @@ from app.core.log.logger import AtlasLogger
 
 ## Import errors
 
-### Symbol not found in __init__.py
+### Symbol not found in `__init__.py`
 
 **Symptoms:** `ImportError: cannot import name 'X' from 'app.rag.X'`
 
 **Causes:**
+
 - The symbol was added in a later version
 - The symbol was removed or renamed
 
 **Solutions:**
+
 ```bash
 # Check available exports
 python -c "from app.rag.pipeline import __all__; print(__all__)"
@@ -96,7 +103,8 @@ python -c "from app.rag.pipeline import __all__; print(__all__)"
 ### InvalidConfiguration: Invalid environment
 
 **Symptoms:**
-```
+
+```text
 InvalidConfiguration: Invalid environment: 'invalid'. Must be one of ('development', 'testing', 'staging', 'production')
 ```
 
@@ -107,7 +115,8 @@ InvalidConfiguration: Invalid environment: 'invalid'. Must be one of ('developme
 ### InvalidConfiguration: Invalid log_level
 
 **Symptoms:**
-```
+
+```text
 InvalidConfiguration: Invalid log_level: 'TRACE'. Must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL
 ```
 
@@ -124,6 +133,7 @@ InvalidConfiguration: Invalid log_level: 'TRACE'. Must be one of DEBUG, INFO, WA
 **Causes:** The provider name is not registered in the global registry.
 
 **Diagnostic:**
+
 ```bash
 PYTHONPATH=. python -c "
 from app.rag.embeddings import list_providers
@@ -132,6 +142,7 @@ print('Available:', list_providers())
 ```
 
 **Solutions:**
+
 ```python
 # Register before use
 from app.rag.embeddings import register_provider
@@ -166,6 +177,7 @@ register("my_check", my_fn)
 **Solutions:**
 
 In scripts:
+
 ```python
 async def main():
     result = await pipeline.search("query")
@@ -175,6 +187,7 @@ if __name__ == "__main__":
 ```
 
 In Jupyter / REPL:
+
 ```python
 result = await pipeline.search("query")
 ```
@@ -186,6 +199,7 @@ result = await pipeline.search("query")
 **Causes:** An async function was called but not awaited.
 
 **Solution:**
+
 ```python
 # Wrong
 result = my_async_fn()
@@ -199,13 +213,15 @@ result = await my_async_fn()
 ### PERSISTENCE_TARGET_EXISTS
 
 **Symptoms:**
-```
+
+```text
 PersistenceError: Target path already exists: snapshot.json
 ```
 
 **Causes:** `save()` was called on an existing path with default `overwrite=False`.
 
 **Solutions:**
+
 ```python
 # Option 1: Allow overwrite
 backend = JsonPersistenceBackend(PersistenceConfig(overwrite=True))
@@ -221,13 +237,15 @@ await backend.save("snapshot.json", kb)
 ### PERSISTENCE_PATH_NOT_FOUND
 
 **Symptoms:**
-```
+
+```text
 PersistenceError: Path does not exist: snapshot.json
 ```
 
 **Causes:** `load()` was called on a non-existent file.
 
 **Solution:**
+
 ```python
 if await backend.exists("snapshot.json"):
     result = await backend.load("snapshot.json")
@@ -242,6 +260,7 @@ else:
 **Causes:** The file was truncated, hand-edited incorrectly, or produced by a different version.
 
 **Solutions:**
+
 ```bash
 # Check JSON validity
 python -m json.tool snapshot.json
@@ -259,6 +278,7 @@ await backend.save("snapshot.json", kb, overwrite=True)
 **Causes:** The total benchmark duration was 0 or very close to 0 (too few queries or too fast).
 
 **Solutions:**
+
 - Increase `benchmark_runs`
 - Use a slower component (e.g., add `asyncio.sleep(0.001)`)
 - Increase dataset size
@@ -268,11 +288,13 @@ await backend.save("snapshot.json", kb, overwrite=True)
 **Symptoms:** Latency is higher than expected.
 
 **Causes:**
+
 - No warmup runs — caches not populated
 - Debug logging enabled — I/O overhead
 - System under load
 
 **Solutions:**
+
 ```python
 # Add warmup runs
 result = await runner.run(component, dataset, warmup_runs=10, benchmark_runs=20)
@@ -285,10 +307,12 @@ result = await runner.run(component, dataset, warmup_runs=10, benchmark_runs=20)
 **Symptoms:** No JSON log lines visible.
 
 **Causes:**
+
 - Log level is too restrictive
 - Output is captured by the test runner
 
 **Solutions:**
+
 ```python
 # Set level appropriately
 log = AtlasLogger("my-logger", level="DEBUG")
@@ -303,6 +327,7 @@ log = AtlasLogger("my-logger", level="DEBUG")
 **Causes:** Metadata is passed as part of the message string, not as keyword arguments.
 
 **Solutions:**
+
 ```python
 # Wrong — metadata embedded in message
 log.info(f"Request from {ip} on port {port}")

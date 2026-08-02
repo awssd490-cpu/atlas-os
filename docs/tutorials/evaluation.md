@@ -129,7 +129,7 @@ See `examples/benchmark_demo.py` for the full runnable example.
 
 ## Expected output
 
-```
+```text
 P@5=1.000 R@5=1.000 F1@5=1.000
 Average latency: 12.3 ms
 Throughput: 81.3 qps

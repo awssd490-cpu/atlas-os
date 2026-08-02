@@ -205,6 +205,23 @@ This roadmap defines the milestones for building ATLAS. Each phase builds on the
 
 ---
 
+## Phase 12.2: CI/CD & Release Automation
+
+**Continuous integration, linting, packaging, and release tooling.**
+
+- [x] GitHub Actions workflows — tests, lint, build, docs validation
+- [x] Dependabot for GitHub Actions and Python dependencies
+- [x] CODEOWNERS and repository governance
+- [x] Linting & formatting tooling (Ruff, Black, isort, mypy) configured in `pyproject.toml`
+- [x] Distribution build and metadata validation (wheel + sdist via `build`, `twine check`)
+- [x] GitHub Releases automation on version tags (PyPI publishing deferred)
+- [x] Documentation validation (markdownlint, markdown-link-check, example compile checks)
+- [x] `.gitignore` hygiene for generated artifacts
+
+**Delivery:** Atlas is continuously tested, linted, and packaged on every push and pull request, and tagged versions produce GitHub Releases.
+
+---
+
 ## Current Status
 
 | Phase | Status | Target |
@@ -221,3 +238,4 @@ This roadmap defines the milestones for building ATLAS. Each phase builds on the
 | 10: Orchestration | Planned | Q3 2027 |
 | 11: Production | Planned | Q4 2027 |
 | 12: Ecosystem | Ongoing | 2028+ |
+| 12.2: CI/CD & Release Automation | **Complete** | Q3 2026 |

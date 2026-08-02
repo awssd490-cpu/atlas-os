@@ -4,10 +4,12 @@
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 [![Tests](https://img.shields.io/badge/tests-2400%2B-brightgreen.svg)](tests/)
 [![RAG](https://img.shields.io/badge/RAG-complete-orange.svg)](docs/api/rag.md)
-[![Documentation](https://img.shields.io/badge/docs-phase11-blueviolet.svg)](docs/api/overview.md)
+[![Documentation](https://img.shields.io/badge/docs-phase12-blueviolet.svg)](docs/api/overview.md)
+[![CI: tests](https://github.com/awssd490-cpu/atlas-os/actions/workflows/tests.yml/badge.svg)](https://github.com/awssd490-cpu/atlas-os/actions/workflows/tests.yml)
+[![CI: lint](https://github.com/awssd490-cpu/atlas-os/actions/workflows/lint.yml/badge.svg)](https://github.com/awssd490-cpu/atlas-os/actions/workflows/lint.yml)
+[![CI: build](https://github.com/awssd490-cpu/atlas-os/actions/workflows/build.yml/badge.svg)](https://github.com/awssd490-cpu/atlas-os/actions/workflows/build.yml)
 
 ---
 
@@ -24,7 +26,7 @@ Atlas provides a complete stack for building AI-powered applications:
 
 ### Architecture
 
-```
+```text
 Application Layer
     │
     ├── Agent Runtime ─── Memory System

@@ -1,0 +1,26 @@
+# Dependabot keeps GitHub Actions and Python dependencies up to date.
+#
+# Weekly updates, opened with the `dependencies` label.  Dependabot will
+# auto-publish after a week if the checks pass (default behavior).
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "ci"
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "build"
+    labels:
+      - "dependencies"
+      - "python"

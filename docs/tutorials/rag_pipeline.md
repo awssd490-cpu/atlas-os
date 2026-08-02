@@ -147,6 +147,7 @@ print(result.context)
 ```
 
 The pipeline automatically selects:
+
 - **Hybrid retrieval** when both embedding provider and vector store are present
 - **Keyword-only retrieval** when embeddings are not configured
 - **Reranking** when a reranker is attached to the knowledge base
@@ -167,7 +168,7 @@ See `examples/basic_rag.py` for the full runnable example.
 
 ## Expected output
 
-```
+```text
 Ingested 3 documents
 Mode: hybrid
 Reranking: True

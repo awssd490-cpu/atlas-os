@@ -1,0 +1,18 @@
+{
+  // Markdownlint configuration for Atlas.
+  //
+  // The existing documentation predates strict markdownlint defaults, so a
+  // couple of rules are relaxed to match the project's conventions:
+  //   - MD013  line length default 80 is bumped to 100 to match the codebase
+  //            style guide's 100-character limit.
+  //   - MD033  inline HTML is allowed (e.g. badge images in the README).
+  //   - MD041  files may start with content other than an H1 (front-matter,
+  //            metadata blocks, or a title used inside a table).
+  // The rest of the defaults are enforced.  See https://github.com/DavidAnson
+  // /markdownlint/blob/main/doc/Rules.md for the rule list.
+  config: {
+    MD013: { line_length: 100 },
+    MD033: false,
+    MD041: false
+  },
+}

@@ -4,7 +4,7 @@ Recommended production layout for an Atlas-based RAG application.
 
 ## Directory structure
 
-```
+```text
 rag_app/
 ├── README.md
 ├── requirements.txt

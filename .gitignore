@@ -6,5 +6,16 @@ dist/
 wheels/
 *.egg-info
 
+# Test/coverage artifacts
+.coverage
+reports/
+results.xml
+
+# Local build scratch space
+dist_test/
+
+# Backups and scratch files
+phase12_2_backup.patch
+
 # Virtual environments
 .venv

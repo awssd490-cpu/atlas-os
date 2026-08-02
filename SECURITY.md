@@ -12,6 +12,7 @@ We take security vulnerabilities seriously. Please report them by emailing the
 maintainers directly — do not use public issue trackers for security issues.
 
 **Please include:**
+
 - Description of the vulnerability
 - Steps to reproduce
 - Affected versions
@@ -26,6 +27,7 @@ maintainers directly — do not use public issue trackers for security issues.
 ## Disclosure policy
 
 We follow coordinated disclosure:
+
 1. Reporter submits vulnerability
 2. Maintainers assess and develop fix
 3. Fix is released

@@ -62,15 +62,19 @@ Monolithic AI systems collapse under their own complexity. ATLAS is designed as 
 ## Target Audiences
 
 ### AI Engineers
+
 Building production AI systems. Need reliable infrastructure, not another framework to learn.
 
 ### Platform Teams
+
 Operating AI at scale. Need observability, governance, and resource management.
 
 ### AI Researchers
+
 Experimenting with novel architectures. Need flexibility and instrumentation without reinventing infrastructure.
 
 ### Enterprise Organizations
+
 Need security, compliance, audit trails, and the ability to run anywhere.
 
 ---

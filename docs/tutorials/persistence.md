@@ -134,7 +134,7 @@ See `examples/persistence_demo.py` for the full runnable example.
 
 ## Expected output
 
-```
+```text
 Saved: 2048 bytes
 Loaded 3 documents
 Snapshot: 3 docs, 2048 bytes
