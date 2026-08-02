@@ -61,7 +61,7 @@ jobs:
 
       - name: Upload JUnit test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: junit-python-${{ matrix.python-version }}
           path: reports/junit-${{ matrix.python-version }}.xml
@@ -69,7 +69,7 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-python-${{ matrix.python-version }}
           path: reports/coverage-${{ matrix.python-version }}.xml
